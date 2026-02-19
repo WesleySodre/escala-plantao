@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Layout from "@/components/Layout";
 import { useSchedule, type Scale } from "@/contexts/ScheduleContext";
+import { isAdmin } from "@/auth/adminAuth";
 import { Plus, Trash2, Pencil, Copy, GripVertical, Power } from "lucide-react";
 import { useMemo, useState, type DragEvent } from "react";
 import { toast } from "sonner";
@@ -38,6 +39,7 @@ const WEEKDAY_OPTIONS = [
 const ALL_WEEKDAYS = [1, 2, 3, 4, 5];
 
 export default function Scales() {
+  const admin = isAdmin();
   const {
     scales,
     teamMembers,
@@ -322,13 +324,15 @@ export default function Scales() {
         </div>
 
         <div className="mb-6 flex flex-wrap gap-3">
-          <Button onClick={openCreateDialog} className="gap-2">
+          <Button onClick={openCreateDialog} className="gap-2" disabled={!admin}>
             <Plus size={18} />
             Nova escala
           </Button>
           <AlertDialog open={showRestoreDialog} onOpenChange={setShowRestoreDialog}>
             <AlertDialogTrigger asChild>
-              <Button variant="outline">Restaurar escalas padrão</Button>
+              <Button variant="outline" disabled={!admin}>
+                Restaurar escalas padrão
+              </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
@@ -345,6 +349,7 @@ export default function Scales() {
                     setShowRestoreDialog(false);
                     toast.success("Escalas padrão restauradas");
                   }}
+                  disabled={!admin}
                 >
                   Restaurar
                 </AlertDialogAction>
@@ -404,6 +409,7 @@ export default function Scales() {
                             size="sm"
                             onClick={() => handleToggleActive(scale)}
                             className="gap-1"
+                            disabled={!admin}
                           >
                             <Power size={14} />
                             {scale.isActive ? "Desativar" : "Ativar"}
@@ -413,6 +419,7 @@ export default function Scales() {
                             size="sm"
                             onClick={() => openEditDialog(scale)}
                             className="gap-1"
+                            disabled={!admin}
                           >
                             <Pencil size={14} />
                             Editar
@@ -422,6 +429,7 @@ export default function Scales() {
                             size="sm"
                             onClick={() => handleDuplicateScale(scale)}
                             className="gap-1"
+                            disabled={!admin}
                           >
                             <Copy size={14} />
                             Duplicar
@@ -431,6 +439,7 @@ export default function Scales() {
                             size="sm"
                             onClick={() => setPendingDelete(scale)}
                             className="gap-1 text-destructive hover:text-destructive"
+                            disabled={!admin}
                           >
                             <Trash2 size={14} />
                             Excluir
@@ -525,6 +534,7 @@ export default function Scales() {
                 <Checkbox
                   checked={scaleActive}
                   onCheckedChange={(checked) => setScaleActive(checked === true)}
+                  disabled={!admin}
                 />
                 <span className="text-sm">Escala ativa</span>
               </div>
@@ -536,7 +546,7 @@ export default function Scales() {
                 >
                   Cancelar
                 </Button>
-                <Button onClick={handleSaveScale} className="flex-1">
+                <Button onClick={handleSaveScale} className="flex-1" disabled={!admin}>
                   Salvar
                 </Button>
               </div>
@@ -563,7 +573,7 @@ export default function Scales() {
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancelar</AlertDialogCancel>
-              <AlertDialogAction onClick={handleConfirmDelete}>
+              <AlertDialogAction onClick={handleConfirmDelete} disabled={!admin}>
                 Excluir
               </AlertDialogAction>
             </AlertDialogFooter>

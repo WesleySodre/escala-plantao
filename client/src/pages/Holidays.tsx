@@ -22,11 +22,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Layout from "@/components/Layout";
 import { DEFAULT_HOLIDAYS, useSchedule } from "@/contexts/ScheduleContext";
+import { isAdmin } from "@/auth/adminAuth";
 import { Plus, Trash2, AlertCircle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
 export default function Holidays() {
+  const admin = isAdmin();
   const { holidays, addHoliday, removeHoliday, replaceHolidays } = useSchedule();
   const [showAddHoliday, setShowAddHoliday] = useState(false);
   const [showRestoreDialog, setShowRestoreDialog] = useState(false);
@@ -90,7 +92,7 @@ export default function Holidays() {
         <div className="mb-8 flex flex-wrap gap-3">
           <Dialog open={showAddHoliday} onOpenChange={setShowAddHoliday}>
             <DialogTrigger asChild>
-              <Button className="gap-2">
+              <Button className="gap-2" disabled={!admin}>
                 <Plus size={18} />
                 Adicionar Feriado
               </Button>
@@ -122,7 +124,7 @@ export default function Holidays() {
                     placeholder="Ex: Carnaval, Recesso, etc."
                   />
                 </div>
-                <Button onClick={handleAddHoliday} className="w-full">
+                <Button onClick={handleAddHoliday} className="w-full" disabled={!admin}>
                   Adicionar
                 </Button>
               </div>
@@ -131,7 +133,9 @@ export default function Holidays() {
 
           <AlertDialog open={showRestoreDialog} onOpenChange={setShowRestoreDialog}>
             <AlertDialogTrigger asChild>
-              <Button variant="outline">Restaurar feriados padrões</Button>
+              <Button variant="outline" disabled={!admin}>
+                Restaurar feriados padrões
+              </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
@@ -142,7 +146,7 @@ export default function Holidays() {
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                <AlertDialogAction onClick={handleRestoreDefaults}>
+                <AlertDialogAction onClick={handleRestoreDefaults} disabled={!admin}>
                   Restaurar
                 </AlertDialogAction>
               </AlertDialogFooter>
@@ -180,6 +184,7 @@ export default function Holidays() {
                           size="sm"
                           onClick={() => handleRemoveHoliday(holiday.id, holiday.name)}
                           className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                          disabled={!admin}
                         >
                           <Trash2 size={16} />
                         </Button>

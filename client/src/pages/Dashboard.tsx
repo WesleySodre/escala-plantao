@@ -22,11 +22,13 @@ import { Label } from "@/components/ui/label";
 import Layout from "@/components/Layout";
 import { getScheduledPerson, isWorkingDay, getActiveScaleForDate } from "@/lib/scheduleCalculator";
 import { useSchedule } from "@/contexts/ScheduleContext";
+import { isAdmin } from "@/auth/adminAuth";
 import { ChevronLeft, ChevronRight, Plus, Trash2, GripVertical } from "lucide-react";
 import { useEffect, useState, type DragEvent } from "react";
 import { toast } from "sonner";
 
 export default function Dashboard() {
+  const admin = isAdmin();
   const today = new Date();
   const [currentMonth, setCurrentMonth] = useState(today.getMonth());
   const [currentYear, setCurrentYear] = useState(today.getFullYear());
@@ -825,7 +827,7 @@ export default function Dashboard() {
                 <h3 className="text-lg font-semibold text-foreground">Equipe ({activeTeamMembers.length})</h3>
                 <Dialog open={showAddMember} onOpenChange={setShowAddMember}>
                   <DialogTrigger asChild>
-                    <Button size="sm" variant="outline" className="gap-2">
+                    <Button size="sm" variant="outline" className="gap-2" disabled={!admin}>
                       <Plus size={16} />
                       Adicionar
                     </Button>
@@ -847,7 +849,7 @@ export default function Dashboard() {
                           placeholder="Nome do membro"
                         />
                       </div>
-                      <Button onClick={handleAddMember} className="w-full">
+                      <Button onClick={handleAddMember} className="w-full" disabled={!admin}>
                         Adicionar
                       </Button>
                     </div>
@@ -861,6 +863,7 @@ export default function Dashboard() {
                 size="sm"
                 className="w-full mb-4 gap-2"
                 onClick={handleOpenReorderDialog}
+                disabled={!admin}
               >
                 <GripVertical size={16} />
                 Organizar Rotação
@@ -871,11 +874,17 @@ export default function Dashboard() {
                   {activeTeamMembers.map((member) => (
                   <div
                     key={member.id}
-                    className="flex items-center justify-between p-3 bg-secondary rounded-lg hover:bg-secondary/80 transition-colors cursor-pointer"
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => handleOpenWorkDaysDialog(member.id)}
+                    className={`flex items-center justify-between p-3 bg-secondary rounded-lg transition-colors ${
+                      admin ? "hover:bg-secondary/80 cursor-pointer" : "cursor-default"
+                    }`}
+                    role={admin ? "button" : undefined}
+                    tabIndex={admin ? 0 : -1}
+                    onClick={() => {
+                      if (!admin) return;
+                      handleOpenWorkDaysDialog(member.id);
+                    }}
                     onKeyDown={(event) => {
+                      if (!admin) return;
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
                         handleOpenWorkDaysDialog(member.id);
@@ -898,6 +907,7 @@ export default function Dashboard() {
                         handleOpenRemoveMemberDialog(member.id);
                       }}
                       className="h-6 w-6 p-0"
+                      disabled={!admin}
                     >
                       <Trash2 size={14} className="text-destructive" />
                     </Button>
@@ -984,7 +994,7 @@ export default function Dashboard() {
                   <Button
                     onClick={handleConfirmRemoveMember}
                     className="flex-1"
-                    disabled={removeMemberMode === "date" && !removeMemberDate}
+                    disabled={!admin || (removeMemberMode === "date" && !removeMemberDate)}
                   >
                     Confirmar
                   </Button>
@@ -1022,6 +1032,7 @@ export default function Dashboard() {
                           onCheckedChange={(checked) =>
                             handleToggleWorkDay(day.value, checked === true)
                           }
+                          disabled={!admin}
                         />
                         {day.label}
                       </label>
@@ -1039,7 +1050,7 @@ export default function Dashboard() {
                   <Button
                     onClick={handleSaveWorkDays}
                     className="flex-1"
-                    disabled={workDaysSelection.length === 0}
+                    disabled={!admin || workDaysSelection.length === 0}
                   >
                     Salvar
                   </Button>
@@ -1138,7 +1149,7 @@ export default function Dashboard() {
                   >
                     Cancelar
                   </Button>
-                  <Button onClick={handleSaveSwap} className="flex-1">
+                  <Button onClick={handleSaveSwap} className="flex-1" disabled={!admin}>
                     Confirmar
                   </Button>
                 </div>
@@ -1202,6 +1213,7 @@ export default function Dashboard() {
                       variant="outline"
                       onClick={handleRestoreDefaultOrder}
                       className="w-full"
+                      disabled={!admin}
                     >
                       Restaurar ordem padrao
                     </Button>
@@ -1213,7 +1225,7 @@ export default function Dashboard() {
                       >
                         Cancelar
                       </Button>
-                      <Button onClick={handleSaveReorder} className="flex-1">
+                      <Button onClick={handleSaveReorder} className="flex-1" disabled={!admin}>
                         Salvar
                       </Button>
                     </div>
@@ -1228,7 +1240,7 @@ export default function Dashboard() {
                 <h3 className="text-lg font-semibold text-foreground">Férias/Licenças</h3>
                 <Dialog open={showAddTimeOff} onOpenChange={setShowAddTimeOff}>
                   <DialogTrigger asChild>
-                    <Button size="sm" variant="outline" className="gap-2">
+                    <Button size="sm" variant="outline" className="gap-2" disabled={!admin}>
                       <Plus size={16} />
                     </Button>
                   </DialogTrigger>
@@ -1300,7 +1312,7 @@ export default function Dashboard() {
                           </p>
                         )}
                       </div>
-                      <Button onClick={handleAddTimeOff} className="w-full">
+                      <Button onClick={handleAddTimeOff} className="w-full" disabled={!admin}>
                         Adicionar
                       </Button>
                     </div>
@@ -1335,6 +1347,7 @@ export default function Dashboard() {
                           size="sm"
                           onClick={() => handleRemoveTimeOff(timeOff.id)}
                           className="h-6 w-6 p-0"
+                          disabled={!admin}
                         >
                           <Trash2 size={14} className="text-destructive" />
                         </Button>
@@ -1349,7 +1362,13 @@ export default function Dashboard() {
             <div className="border border-border rounded-lg p-6 bg-card shadow-sm">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-semibold text-foreground">Trocas de Plantões</h3>
-                <Button size="sm" variant="outline" className="gap-2" onClick={openSwapDialog}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-2"
+                  onClick={openSwapDialog}
+                  disabled={!admin}
+                >
                   <Plus size={16} />
                 </Button>
               </div>
@@ -1365,11 +1384,17 @@ export default function Dashboard() {
                     return (
                       <div
                         key={swap.id}
-                        className="flex items-center justify-between p-3 bg-secondary rounded-lg hover:bg-secondary/80 transition-colors cursor-pointer"
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => openSwapEditDialog(swap.id)}
+                        className={`flex items-center justify-between p-3 bg-secondary rounded-lg transition-colors ${
+                          admin ? "hover:bg-secondary/80 cursor-pointer" : "cursor-default"
+                        }`}
+                        role={admin ? "button" : undefined}
+                        tabIndex={admin ? 0 : -1}
+                        onClick={() => {
+                          if (!admin) return;
+                          openSwapEditDialog(swap.id);
+                        }}
                         onKeyDown={(event) => {
+                          if (!admin) return;
                           if (event.key === "Enter" || event.key === " ") {
                             event.preventDefault();
                             openSwapEditDialog(swap.id);
@@ -1395,6 +1420,7 @@ export default function Dashboard() {
                             handleRemoveSwap(swap.id);
                           }}
                           className="h-6 w-6 p-0"
+                          disabled={!admin}
                         >
                           <Trash2 size={14} className="text-destructive" />
                         </Button>
