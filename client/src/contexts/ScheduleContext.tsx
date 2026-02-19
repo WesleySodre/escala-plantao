@@ -1,0 +1,520 @@
+import React, { createContext, useContext, useState, useEffect } from "react";
+
+export interface TimeOff {
+  id: string;
+  personName: string;
+  startDate: string; // YYYY-MM-DD
+  type: "vacation" | "license";
+  daysCount: number;
+}
+
+export interface TeamMember {
+  id: string;
+  name: string;
+  joinDate: string; // YYYY-MM-DD
+  removeDate?: string; // YYYY-MM-DD (opcional, para exclusão com data de início)
+  workDays: number[]; // 1-5 para seg-sex (por padrão todos os dias)
+}
+
+export interface ShiftSwap {
+  id: string;
+  date: string; // YYYY-MM-DD
+  originalPerson: string;
+  substitutePerson: string;
+  reason?: string;
+}
+
+export interface Scale {
+  id: string;
+  name: string;
+  weekdays: number[]; // 1-5 (seg-sex)
+  rotationMemberIds: string[];
+  isActive: boolean;
+  createdAt: string;
+  anchorDate?: string;
+  anchorMemberId?: string;
+}
+
+export interface Holiday {
+  id: string;
+  date: string; // YYYY-MM-DD
+  name: string;
+}
+
+export const DEFAULT_HOLIDAYS: Holiday[] = [
+  { id: "1", date: "2026-01-01", name: "Ano Novo" },
+  { id: "2", date: "2026-01-02", name: "Recesso" },
+  { id: "3", date: "2026-01-03", name: "Recesso" },
+  { id: "4", date: "2026-01-04", name: "Recesso" },
+  { id: "5", date: "2026-01-05", name: "Recesso" },
+  { id: "6", date: "2026-01-06", name: "Recesso" },
+  { id: "7", date: "2026-02-16", name: "Carnaval (Suspensão)" },
+  { id: "8", date: "2026-02-17", name: "Carnaval (Feriado)" },
+  { id: "9", date: "2026-02-18", name: "Cinzas (Expediente após 13h)" },
+  { id: "10", date: "2026-04-02", name: "Endoenças (Suspensão)" },
+  { id: "11", date: "2026-04-03", name: "Sexta-feira Santa" },
+  { id: "12", date: "2026-04-20", name: "Suspensão de expediente" },
+  { id: "13", date: "2026-04-21", name: "Tiradentes" },
+  { id: "14", date: "2026-05-01", name: "Dia do Trabalho" },
+  { id: "15", date: "2026-05-19", name: "Aniversário de Hortolândia" },
+  { id: "16", date: "2026-06-04", name: "Corpus Christi" },
+  { id: "17", date: "2026-06-05", name: "Suspensão de expediente" },
+  { id: "18", date: "2026-07-09", name: "Data Magna de SP" },
+  { id: "19", date: "2026-07-10", name: "Suspensão de expediente" },
+  { id: "20", date: "2026-09-07", name: "Independência do Brasil" },
+  { id: "21", date: "2026-10-12", name: "Nsa. Sra. Aparecida" },
+  { id: "22", date: "2026-10-26", name: "Dia do Servidor Público" },
+  { id: "23", date: "2026-11-02", name: "Finados" },
+  { id: "24", date: "2026-11-20", name: "Dia da Consciência Negra" },
+  { id: "25", date: "2026-12-08", name: "Dia da Justiça" },
+  { id: "26", date: "2026-12-20", name: "Recesso" },
+  { id: "27", date: "2026-12-21", name: "Recesso" },
+  { id: "28", date: "2026-12-22", name: "Recesso" },
+  { id: "29", date: "2026-12-23", name: "Recesso" },
+  { id: "30", date: "2026-12-24", name: "Recesso" },
+  { id: "31", date: "2026-12-25", name: "Natal" },
+  { id: "32", date: "2026-12-26", name: "Recesso" },
+  { id: "33", date: "2026-12-27", name: "Recesso" },
+  { id: "34", date: "2026-12-28", name: "Recesso" },
+  { id: "35", date: "2026-12-29", name: "Recesso" },
+  { id: "36", date: "2026-12-30", name: "Recesso" },
+  { id: "37", date: "2026-12-31", name: "Recesso" },
+];
+
+const DEFAULT_ROTATION_NAMES = [
+  "Benedito",
+  "Mauro",
+  "Cláudia",
+  "Rosana",
+  "José Claudio",
+  "Katia",
+  "Daniel",
+  "Leonardo",
+  "Wesley",
+  "Lúcia",
+  "Luis",
+];
+
+interface ScheduleContextType {
+  // Team Management
+  teamMembers: TeamMember[];
+  addTeamMember: (name: string) => void;
+  removeTeamMember: (id: string, removeDate?: string) => void;
+  reorderTeamMembers: (newOrder: string[]) => void; // Reordenar por IDs
+  updateTeamMemberWorkDays: (id: string, workDays: number[]) => void;
+
+  // Time Off Management
+  timeOffs: TimeOff[];
+  addTimeOff: (personName: string, startDate: string, type: "vacation" | "license", daysCount: number) => void;
+  removeTimeOff: (id: string) => void;
+  getTimeOffForPerson: (personName: string, date: string) => TimeOff | undefined;
+  isPersonOnTimeOff: (personName: string, date: string) => boolean;
+
+  // Shift Swap Management
+  shiftSwaps: ShiftSwap[];
+  addShiftSwap: (
+    date: string,
+    originalPerson: string,
+    substitutePerson: string,
+    reason?: string
+  ) => void;
+  updateShiftSwap: (id: string, updates: Partial<ShiftSwap>) => void;
+  removeShiftSwap: (id: string) => void;
+
+  // Scales Management
+  scales: Scale[];
+  addScale: (scale: Scale) => void;
+  updateScale: (id: string, updates: Partial<Scale>) => void;
+  removeScale: (id: string) => void;
+  toggleScaleActive: (id: string, isActive: boolean) => void;
+  restoreDefaultScales: () => void;
+
+  // Holiday Management
+  holidays: Holiday[];
+  addHoliday: (date: string, name: string) => void;
+  removeHoliday: (id: string) => void;
+  isHolidayDate: (date: string) => boolean;
+  replaceHolidays: (holidays: Holiday[]) => void;
+}
+
+const ScheduleContext = createContext<ScheduleContextType | undefined>(undefined);
+
+export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const normalizeName = (value: string) => {
+    return value
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, " ");
+  };
+
+  const buildRotationFromNames = (members: TeamMember[]) => {
+    const normalizedMembers = members.map((member) => ({
+      id: member.id,
+      key: normalizeName(member.name),
+    }));
+    const usedIds = new Set<string>();
+    const orderedIds: string[] = [];
+
+    DEFAULT_ROTATION_NAMES.forEach((name) => {
+      const key = normalizeName(name);
+      const match = normalizedMembers.find((member) => member.key === key && !usedIds.has(member.id));
+      if (!match) return;
+      usedIds.add(match.id);
+      orderedIds.push(match.id);
+    });
+
+    members.forEach((member) => {
+      if (usedIds.has(member.id)) return;
+      usedIds.add(member.id);
+      orderedIds.push(member.id);
+    });
+
+    return orderedIds;
+  };
+
+  const findMemberIdByName = (members: TeamMember[], name: string) => {
+    const key = normalizeName(name);
+    const match = members.find((member) => normalizeName(member.name) === key);
+    return match?.id;
+  };
+
+  const buildDefaultScales = (members: TeamMember[]): Scale[] => {
+    const rotationMemberIds = buildRotationFromNames(members);
+    const katiaId = findMemberIdByName(members, "Katia");
+    const claudiaId = findMemberIdByName(members, "Cláudia");
+
+    return [
+      {
+        id: "scale-1",
+        name: "Seg-Qui",
+        weekdays: [1, 2, 3, 4],
+        rotationMemberIds,
+        isActive: true,
+        createdAt: "2026-02-19",
+        anchorDate: "2026-02-19",
+        anchorMemberId: katiaId,
+      },
+      {
+        id: "scale-2",
+        name: "Sexta",
+        weekdays: [5],
+        rotationMemberIds,
+        isActive: true,
+        createdAt: "2026-02-20",
+        anchorDate: "2026-02-20",
+        anchorMemberId: claudiaId,
+      },
+    ];
+  };
+
+  const syncScaleMembers = (members: TeamMember[], existingScales: Scale[]) => {
+    const memberIds = members.map((member) => member.id);
+    return existingScales.map((scale) => {
+      const filtered = scale.rotationMemberIds.filter((id) => memberIds.includes(id));
+      const missing = memberIds.filter((id) => !filtered.includes(id));
+      return {
+        ...scale,
+        rotationMemberIds: [...filtered, ...missing],
+      };
+    });
+  };
+
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([
+    { id: "1", name: "Benedito", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
+    { id: "2", name: "Mauro", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
+    { id: "3", name: "Cláudia", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
+    { id: "4", name: "Rosana", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
+    { id: "5", name: "José Claudio", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
+    { id: "6", name: "Katia", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
+    { id: "7", name: "Daniel", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
+    { id: "8", name: "Leonardo", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
+    { id: "9", name: "Wesley", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
+    { id: "10", name: "Lúcia", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
+    { id: "11", name: "Luis", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
+  ]);
+
+  const [timeOffs, setTimeOffs] = useState<TimeOff[]>([]);
+  const [shiftSwaps, setShiftSwaps] = useState<ShiftSwap[]>([]);
+  const [scales, setScales] = useState<Scale[]>(() => buildDefaultScales(teamMembers));
+
+  const [holidays, setHolidays] = useState<Holiday[]>(DEFAULT_HOLIDAYS);
+
+  // Load from localStorage
+  useEffect(() => {
+    const savedTeam = localStorage.getItem("teamMembers");
+    const savedTimeOffs = localStorage.getItem("timeOffs");
+    const savedHolidays = localStorage.getItem("holidays");
+    const savedShiftSwaps = localStorage.getItem("shiftSwaps");
+    const savedScales = localStorage.getItem("scales");
+
+    let loadedTeamMembers = teamMembers;
+
+    if (savedTeam) {
+      try {
+        const parsedTeam = JSON.parse(savedTeam) as TeamMember[];
+        const normalizedTeam = parsedTeam.map((member) => ({
+          ...member,
+          workDays: Array.isArray(member.workDays) ? member.workDays : [1, 2, 3, 4, 5],
+        }));
+        setTeamMembers(normalizedTeam);
+        loadedTeamMembers = normalizedTeam;
+      } catch (e) {
+        console.error("Failed to load team members", e);
+      }
+    }
+
+    if (savedTimeOffs) {
+      try {
+        setTimeOffs(JSON.parse(savedTimeOffs));
+      } catch (e) {
+        console.error("Failed to load time offs", e);
+      }
+    }
+
+    if (savedShiftSwaps) {
+      try {
+        setShiftSwaps(JSON.parse(savedShiftSwaps));
+      } catch (e) {
+        console.error("Failed to load shift swaps", e);
+      }
+    }
+
+    if (savedScales) {
+      try {
+        const parsedScales = JSON.parse(savedScales) as Scale[];
+        setScales(parsedScales);
+      } catch (e) {
+        console.error("Failed to load scales", e);
+      }
+    } else {
+      setScales(buildDefaultScales(loadedTeamMembers));
+    }
+
+    if (savedHolidays) {
+      try {
+        setHolidays(JSON.parse(savedHolidays));
+      } catch (e) {
+        console.error("Failed to load holidays", e);
+      }
+    }
+  }, []);
+
+  // Save to localStorage
+  useEffect(() => {
+    localStorage.setItem("teamMembers", JSON.stringify(teamMembers));
+  }, [teamMembers]);
+
+  useEffect(() => {
+    localStorage.setItem("timeOffs", JSON.stringify(timeOffs));
+  }, [timeOffs]);
+
+  useEffect(() => {
+    localStorage.setItem("shiftSwaps", JSON.stringify(shiftSwaps));
+  }, [shiftSwaps]);
+
+  useEffect(() => {
+    localStorage.setItem("scales", JSON.stringify(scales));
+  }, [scales]);
+
+  useEffect(() => {
+    localStorage.setItem("holidays", JSON.stringify(holidays));
+  }, [holidays]);
+
+  useEffect(() => {
+    setScales((prev) => {
+      const next = syncScaleMembers(teamMembers, prev);
+      const unchanged = JSON.stringify(prev) === JSON.stringify(next);
+      return unchanged ? prev : next;
+    });
+  }, [teamMembers]);
+
+  const addTeamMember = (name: string) => {
+    const newMember: TeamMember = {
+      id: Date.now().toString(),
+      name,
+      joinDate: new Date().toISOString().split("T")[0],
+      workDays: [1, 2, 3, 4, 5], // Por padrão, todos os dias
+    };
+    setTeamMembers([...teamMembers, newMember]);
+  };
+
+  const removeTeamMember = (id: string, removeDate?: string) => {
+    if (removeDate) {
+      // Exclusão com data de início: apenas adiciona removeDate
+      setTeamMembers(
+        teamMembers.map((member) =>
+          member.id === id ? { ...member, removeDate } : member
+        )
+      );
+    } else {
+      // Exclusão completa
+      setTeamMembers(teamMembers.filter((member) => member.id !== id));
+    }
+  };
+
+  const updateTeamMemberWorkDays = (id: string, workDays: number[]) => {
+    setTeamMembers(
+      teamMembers.map((member) =>
+        member.id === id ? { ...member, workDays } : member
+      )
+    );
+  };
+
+  const reorderTeamMembers = (newOrder: string[]) => {
+    const reorderedMembers = newOrder
+      .map((id) => teamMembers.find((member) => member.id === id))
+      .filter((member) => member !== undefined) as TeamMember[];
+    const orderSet = new Set(newOrder);
+    const remainingMembers = teamMembers.filter((member) => !orderSet.has(member.id));
+    setTeamMembers([...reorderedMembers, ...remainingMembers]);
+  };
+
+  const addTimeOff = (
+    personName: string,
+    startDate: string,
+    type: "vacation" | "license",
+    daysCount: number
+  ) => {
+    const newTimeOff: TimeOff = {
+      id: Date.now().toString(),
+      personName,
+      startDate,
+      type,
+      daysCount,
+    };
+    setTimeOffs([...timeOffs, newTimeOff]);
+  };
+
+  const removeTimeOff = (id: string) => {
+    setTimeOffs(timeOffs.filter((timeOff) => timeOff.id !== id));
+  };
+
+  const getTimeOffForPerson = (personName: string, date: string): TimeOff | undefined => {
+    return timeOffs.find((timeOff) => {
+      if (timeOff.personName !== personName) return false;
+
+      const startDate = new Date(timeOff.startDate);
+      const endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + timeOff.daysCount - 1);
+
+      const checkDate = new Date(date);
+
+      return checkDate >= startDate && checkDate <= endDate;
+    });
+  };
+
+  const isPersonOnTimeOff = (personName: string, date: string): boolean => {
+    return getTimeOffForPerson(personName, date) !== undefined;
+  };
+
+  const addShiftSwap = (
+    date: string,
+    originalPerson: string,
+    substitutePerson: string,
+    reason?: string
+  ) => {
+    const newSwap: ShiftSwap = {
+      id: Date.now().toString(),
+      date,
+      originalPerson,
+      substitutePerson,
+      reason,
+    };
+    setShiftSwaps([...shiftSwaps, newSwap]);
+  };
+
+  const updateShiftSwap = (id: string, updates: Partial<ShiftSwap>) => {
+    setShiftSwaps(
+      shiftSwaps.map((swap) => (swap.id === id ? { ...swap, ...updates } : swap))
+    );
+  };
+
+  const removeShiftSwap = (id: string) => {
+    setShiftSwaps(shiftSwaps.filter((swap) => swap.id !== id));
+  };
+
+  const addScale = (scale: Scale) => {
+    setScales([...scales, scale]);
+  };
+
+  const updateScale = (id: string, updates: Partial<Scale>) => {
+    setScales(scales.map((scale) => (scale.id === id ? { ...scale, ...updates } : scale)));
+  };
+
+  const removeScale = (id: string) => {
+    setScales(scales.filter((scale) => scale.id !== id));
+  };
+
+  const toggleScaleActive = (id: string, isActive: boolean) => {
+    setScales(scales.map((scale) => (scale.id === id ? { ...scale, isActive } : scale)));
+  };
+
+  const restoreDefaultScales = () => {
+    setScales(buildDefaultScales(teamMembers));
+  };
+
+  const addHoliday = (date: string, name: string) => {
+    const newHoliday: Holiday = {
+      id: Date.now().toString(),
+      date,
+      name,
+    };
+    setHolidays([...holidays, newHoliday]);
+  };
+
+  const removeHoliday = (id: string) => {
+    setHolidays(holidays.filter((holiday) => holiday.id !== id));
+  };
+
+  const isHolidayDate = (date: string): boolean => {
+    return holidays.some((holiday) => holiday.date === date);
+  };
+
+  const replaceHolidays = (nextHolidays: Holiday[]) => {
+    setHolidays(nextHolidays);
+  };
+
+  return (
+    <ScheduleContext.Provider
+      value={{
+        teamMembers,
+        addTeamMember,
+        removeTeamMember,
+        reorderTeamMembers,
+        updateTeamMemberWorkDays,
+        timeOffs,
+        addTimeOff,
+        removeTimeOff,
+        getTimeOffForPerson,
+        isPersonOnTimeOff,
+        shiftSwaps,
+        addShiftSwap,
+        updateShiftSwap,
+        removeShiftSwap,
+        scales,
+        addScale,
+        updateScale,
+        removeScale,
+        toggleScaleActive,
+        restoreDefaultScales,
+        holidays,
+        addHoliday,
+        removeHoliday,
+        isHolidayDate,
+        replaceHolidays,
+      }}
+    >
+      {children}
+    </ScheduleContext.Provider>
+  );
+};
+
+export const useSchedule = () => {
+  const context = useContext(ScheduleContext);
+  if (!context) {
+    throw new Error("useSchedule must be used within a ScheduleProvider");
+  }
+  return context;
+};
