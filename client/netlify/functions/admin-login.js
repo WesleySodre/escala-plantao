@@ -10,9 +10,13 @@
     return { statusCode: 400, body: JSON.stringify({ success: false, error: "Invalid JSON" }) };
   }
 
-  const password = String(data.password || "");
-  const expected = process.env.ADMIN_PASSWORD || "";
+  const password = String(data.password || "").trim();
+  const expected = String(process.env.ADMIN_PASSWORD || "").trim();
   const jwtSecret = process.env.ADMIN_JWT_SECRET || "";
+
+  if (!password) {
+    return { statusCode: 400, body: JSON.stringify({ success: false, error: "Password required" }) };
+  }
 
   if (!expected) {
     return { statusCode: 500, body: JSON.stringify({ success: false, error: "ADMIN_PASSWORD not set" }) };
