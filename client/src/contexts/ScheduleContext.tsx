@@ -1,4 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
+import { loadAppState } from "@/lib/stateApi";
+import { adminLogout, getAdminJwt, isAdmin } from "@/auth/adminAuth";
 
 export interface TimeOff {
   id: string;
@@ -241,64 +243,121 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const [holidays, setHolidays] = useState<Holiday[]>(DEFAULT_HOLIDAYS);
 
-  // Load from localStorage
+  // Load from Supabase (fallback to localStorage if empty)
   useEffect(() => {
-    const savedTeam = localStorage.getItem("teamMembers");
-    const savedTimeOffs = localStorage.getItem("timeOffs");
-    const savedHolidays = localStorage.getItem("holidays");
-    const savedShiftSwaps = localStorage.getItem("shiftSwaps");
-    const savedScales = localStorage.getItem("scales");
+    const normalizeTeam = (members: TeamMember[]) =>
+      members.map((member) => ({
+        ...member,
+        workDays: Array.isArray(member.workDays) ? member.workDays : [1, 2, 3, 4, 5],
+      }));
 
-    let loadedTeamMembers = teamMembers;
+    const applyStateFromPayload = (payload: {
+      teamMembers?: TeamMember[];
+      timeOffs?: TimeOff[];
+      holidays?: Holiday[];
+      shiftSwaps?: ShiftSwap[];
+      scales?: Scale[];
+    }) => {
+      let loadedTeamMembers = teamMembers;
 
-    if (savedTeam) {
-      try {
-        const parsedTeam = JSON.parse(savedTeam) as TeamMember[];
-        const normalizedTeam = parsedTeam.map((member) => ({
-          ...member,
-          workDays: Array.isArray(member.workDays) ? member.workDays : [1, 2, 3, 4, 5],
-        }));
+      if (Array.isArray(payload.teamMembers)) {
+        const normalizedTeam = normalizeTeam(payload.teamMembers);
         setTeamMembers(normalizedTeam);
         loadedTeamMembers = normalizedTeam;
-      } catch (e) {
-        console.error("Failed to load team members", e);
       }
-    }
 
-    if (savedTimeOffs) {
-      try {
-        setTimeOffs(JSON.parse(savedTimeOffs));
-      } catch (e) {
-        console.error("Failed to load time offs", e);
+      if (Array.isArray(payload.timeOffs)) {
+        setTimeOffs(payload.timeOffs);
       }
-    }
 
-    if (savedShiftSwaps) {
-      try {
-        setShiftSwaps(JSON.parse(savedShiftSwaps));
-      } catch (e) {
-        console.error("Failed to load shift swaps", e);
+      if (Array.isArray(payload.shiftSwaps)) {
+        setShiftSwaps(payload.shiftSwaps);
       }
-    }
 
-    if (savedScales) {
-      try {
-        const parsedScales = JSON.parse(savedScales) as Scale[];
-        setScales(parsedScales);
-      } catch (e) {
-        console.error("Failed to load scales", e);
+      if (Array.isArray(payload.scales)) {
+        setScales(payload.scales);
+      } else if (payload.scales === undefined) {
+        setScales(buildDefaultScales(loadedTeamMembers));
       }
-    } else {
-      setScales(buildDefaultScales(loadedTeamMembers));
-    }
 
-    if (savedHolidays) {
-      try {
-        setHolidays(JSON.parse(savedHolidays));
-      } catch (e) {
-        console.error("Failed to load holidays", e);
+      if (Array.isArray(payload.holidays)) {
+        setHolidays(payload.holidays);
       }
-    }
+    };
+
+    const loadFromLocalStorage = () => {
+      const savedTeam = localStorage.getItem("teamMembers");
+      const savedTimeOffs = localStorage.getItem("timeOffs");
+      const savedHolidays = localStorage.getItem("holidays");
+      const savedShiftSwaps = localStorage.getItem("shiftSwaps");
+      const savedScales = localStorage.getItem("scales");
+
+      const payload: {
+        teamMembers?: TeamMember[];
+        timeOffs?: TimeOff[];
+        holidays?: Holiday[];
+        shiftSwaps?: ShiftSwap[];
+        scales?: Scale[];
+      } = {};
+
+      if (savedTeam) {
+        try {
+          payload.teamMembers = JSON.parse(savedTeam) as TeamMember[];
+        } catch (e) {
+          console.error("Failed to load team members", e);
+        }
+      }
+
+      if (savedTimeOffs) {
+        try {
+          payload.timeOffs = JSON.parse(savedTimeOffs) as TimeOff[];
+        } catch (e) {
+          console.error("Failed to load time offs", e);
+        }
+      }
+
+      if (savedShiftSwaps) {
+        try {
+          payload.shiftSwaps = JSON.parse(savedShiftSwaps) as ShiftSwap[];
+        } catch (e) {
+          console.error("Failed to load shift swaps", e);
+        }
+      }
+
+      if (savedScales) {
+        try {
+          payload.scales = JSON.parse(savedScales) as Scale[];
+        } catch (e) {
+          console.error("Failed to load scales", e);
+        }
+      }
+
+      if (savedHolidays) {
+        try {
+          payload.holidays = JSON.parse(savedHolidays) as Holiday[];
+        } catch (e) {
+          console.error("Failed to load holidays", e);
+        }
+      }
+
+      applyStateFromPayload(payload);
+    };
+
+    const init = async () => {
+      try {
+        const dbState = await loadAppState();
+        if (dbState && Object.keys(dbState).length > 0) {
+          applyStateFromPayload(dbState);
+          return;
+        }
+      } catch (err) {
+        console.error("Erro ao carregar estado do Supabase:", err);
+      }
+
+      loadFromLocalStorage();
+    };
+
+    init();
   }, []);
 
   // Save to localStorage
@@ -321,6 +380,53 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   useEffect(() => {
     localStorage.setItem("holidays", JSON.stringify(holidays));
   }, [holidays]);
+
+  useEffect(() => {
+    if (!isAdmin()) return;
+
+    const token = getAdminJwt();
+    if (!token) {
+      adminLogout();
+      alert("SessÃ£o expirada. Entre como admin novamente.");
+      return;
+    }
+
+    const payload = {
+      teamMembers,
+      timeOffs,
+      holidays,
+      shiftSwaps,
+      scales,
+    };
+
+    const saveState = async () => {
+      try {
+        const res = await fetch("/.netlify/functions/save-state", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ data: payload }),
+        });
+
+        if (res.status === 401) {
+          adminLogout();
+          alert("SessÃ£o expirada. Entre como admin novamente.");
+          return;
+        }
+
+        if (!res.ok) {
+          const text = await res.text();
+          console.error("Erro ao salvar estado no Supabase:", text);
+        }
+      } catch (err) {
+        console.error("Erro ao salvar estado no Supabase:", err);
+      }
+    };
+
+    saveState();
+  }, [teamMembers, timeOffs, holidays, shiftSwaps, scales]);
 
   useEffect(() => {
     setScales((prev) => {
