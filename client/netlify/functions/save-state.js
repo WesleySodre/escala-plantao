@@ -1,9 +1,9 @@
-﻿exports.handler = async (event) => {
+﻿export const handler = async (event) => {
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method Not Allowed" };
   }
 
-  // Exige JWT vÃ¡lido de admin
+  // Exige JWT valido de admin
   const auth = event.headers.authorization || event.headers.Authorization || "";
   const token = auth.replace("Bearer ", "").trim();
   const jwtSecret = process.env.ADMIN_JWT_SECRET || "";

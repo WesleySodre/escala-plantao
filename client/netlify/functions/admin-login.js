@@ -1,4 +1,4 @@
-﻿exports.handler = async (event) => {
+﻿export const handler = async (event) => {
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method Not Allowed" };
   }
@@ -10,32 +10,29 @@
     return { statusCode: 400, body: JSON.stringify({ success: false, error: "Invalid JSON" }) };
   }
 
-  const password = String(data.password || "").trim();
-  const expected = String(process.env.ADMIN_PASSWORD || "").trim();
+  const password = String(data.password || "");
+  const expected = process.env.ADMIN_PASSWORD || "";
   const jwtSecret = process.env.ADMIN_JWT_SECRET || "";
-
-  if (!password) {
-    return { statusCode: 400, body: JSON.stringify({ success: false, error: "Password required" }) };
-  }
 
   if (!expected) {
     return { statusCode: 500, body: JSON.stringify({ success: false, error: "ADMIN_PASSWORD not set" }) };
   }
-
   if (!jwtSecret) {
     return { statusCode: 500, body: JSON.stringify({ success: false, error: "ADMIN_JWT_SECRET not set" }) };
   }
 
-  if (password === expected) {
-    const { SignJWT } = await import("jose");
-    const secretKey = new TextEncoder().encode(jwtSecret);
-    const token = await new SignJWT({ admin: true })
-      .setProtectedHeader({ alg: "HS256" })
-      .setIssuedAt()
-      .setExpirationTime("30m")
-      .sign(secretKey);
-    return { statusCode: 200, body: JSON.stringify({ success: true, token }) };
+  if (password !== expected) {
+    return { statusCode: 401, body: JSON.stringify({ success: false }) };
   }
 
-  return { statusCode: 401, body: JSON.stringify({ success: false }) };
+  const { SignJWT } = await import("jose");
+  const secretKey = new TextEncoder().encode(jwtSecret);
+
+  const token = await new SignJWT({ admin: true })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime("30m")
+    .sign(secretKey);
+
+  return { statusCode: 200, body: JSON.stringify({ success: true, token }) };
 };
