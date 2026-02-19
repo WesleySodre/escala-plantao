@@ -1,8 +1,7 @@
 [build]
-  base = "client"
   command = "pnpm install --frozen-lockfile && pnpm run build"
   publish = "dist/public"
-  functions = "netlify/functions"
+  functions = "client/netlify/functions"
 
 [[redirects]]
   from = "/*"
