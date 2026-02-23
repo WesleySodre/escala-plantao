@@ -137,6 +137,9 @@ interface ScheduleContextType {
   removeHoliday: (id: string) => void;
   isHolidayDate: (date: string) => boolean;
   replaceHolidays: (holidays: Holiday[]) => void;
+
+  // Data Management
+  reloadFromSupabase: () => Promise<boolean>;
 }
 
 const ScheduleContext = createContext<ScheduleContextType | undefined>(undefined);
@@ -243,118 +246,124 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const [holidays, setHolidays] = useState<Holiday[]>(DEFAULT_HOLIDAYS);
 
-  // Load from Supabase (fallback to localStorage if empty)
-  useEffect(() => {
-    const normalizeTeam = (members: TeamMember[]) =>
-      members.map((member) => ({
-        ...member,
-        workDays: Array.isArray(member.workDays) ? member.workDays : [1, 2, 3, 4, 5],
-      }));
+  const normalizeTeam = (members: TeamMember[]) =>
+    members.map((member) => ({
+      ...member,
+      workDays: Array.isArray(member.workDays) ? member.workDays : [1, 2, 3, 4, 5],
+    }));
 
-    const applyStateFromPayload = (payload: {
+  const applyStateFromPayload = (payload: {
+    teamMembers?: TeamMember[];
+    timeOffs?: TimeOff[];
+    holidays?: Holiday[];
+    shiftSwaps?: ShiftSwap[];
+    scales?: Scale[];
+  }) => {
+    let loadedTeamMembers = teamMembers;
+
+    if (Array.isArray(payload.teamMembers)) {
+      const normalizedTeam = normalizeTeam(payload.teamMembers);
+      setTeamMembers(normalizedTeam);
+      loadedTeamMembers = normalizedTeam;
+    }
+
+    if (Array.isArray(payload.timeOffs)) {
+      setTimeOffs(payload.timeOffs);
+    }
+
+    if (Array.isArray(payload.shiftSwaps)) {
+      setShiftSwaps(payload.shiftSwaps);
+    }
+
+    if (Array.isArray(payload.scales)) {
+      setScales(payload.scales);
+    } else if (payload.scales === undefined) {
+      setScales(buildDefaultScales(loadedTeamMembers));
+    }
+
+    if (Array.isArray(payload.holidays)) {
+      setHolidays(payload.holidays);
+    }
+  };
+
+  const loadFromLocalStorage = () => {
+    const savedTeam = localStorage.getItem("teamMembers");
+    const savedTimeOffs = localStorage.getItem("timeOffs");
+    const savedHolidays = localStorage.getItem("holidays");
+    const savedShiftSwaps = localStorage.getItem("shiftSwaps");
+    const savedScales = localStorage.getItem("scales");
+
+    const payload: {
       teamMembers?: TeamMember[];
       timeOffs?: TimeOff[];
       holidays?: Holiday[];
       shiftSwaps?: ShiftSwap[];
       scales?: Scale[];
-    }) => {
-      let loadedTeamMembers = teamMembers;
+    } = {};
 
-      if (Array.isArray(payload.teamMembers)) {
-        const normalizedTeam = normalizeTeam(payload.teamMembers);
-        setTeamMembers(normalizedTeam);
-        loadedTeamMembers = normalizedTeam;
-      }
-
-      if (Array.isArray(payload.timeOffs)) {
-        setTimeOffs(payload.timeOffs);
-      }
-
-      if (Array.isArray(payload.shiftSwaps)) {
-        setShiftSwaps(payload.shiftSwaps);
-      }
-
-      if (Array.isArray(payload.scales)) {
-        setScales(payload.scales);
-      } else if (payload.scales === undefined) {
-        setScales(buildDefaultScales(loadedTeamMembers));
-      }
-
-      if (Array.isArray(payload.holidays)) {
-        setHolidays(payload.holidays);
-      }
-    };
-
-    const loadFromLocalStorage = () => {
-      const savedTeam = localStorage.getItem("teamMembers");
-      const savedTimeOffs = localStorage.getItem("timeOffs");
-      const savedHolidays = localStorage.getItem("holidays");
-      const savedShiftSwaps = localStorage.getItem("shiftSwaps");
-      const savedScales = localStorage.getItem("scales");
-
-      const payload: {
-        teamMembers?: TeamMember[];
-        timeOffs?: TimeOff[];
-        holidays?: Holiday[];
-        shiftSwaps?: ShiftSwap[];
-        scales?: Scale[];
-      } = {};
-
-      if (savedTeam) {
-        try {
-          payload.teamMembers = JSON.parse(savedTeam) as TeamMember[];
-        } catch (e) {
-          console.error("Failed to load team members", e);
-        }
-      }
-
-      if (savedTimeOffs) {
-        try {
-          payload.timeOffs = JSON.parse(savedTimeOffs) as TimeOff[];
-        } catch (e) {
-          console.error("Failed to load time offs", e);
-        }
-      }
-
-      if (savedShiftSwaps) {
-        try {
-          payload.shiftSwaps = JSON.parse(savedShiftSwaps) as ShiftSwap[];
-        } catch (e) {
-          console.error("Failed to load shift swaps", e);
-        }
-      }
-
-      if (savedScales) {
-        try {
-          payload.scales = JSON.parse(savedScales) as Scale[];
-        } catch (e) {
-          console.error("Failed to load scales", e);
-        }
-      }
-
-      if (savedHolidays) {
-        try {
-          payload.holidays = JSON.parse(savedHolidays) as Holiday[];
-        } catch (e) {
-          console.error("Failed to load holidays", e);
-        }
-      }
-
-      applyStateFromPayload(payload);
-    };
-
-    const init = async () => {
+    if (savedTeam) {
       try {
-        const dbState = await loadAppState();
-        if (dbState && Object.keys(dbState).length > 0) {
-          applyStateFromPayload(dbState);
-          return;
-        }
-      } catch (err) {
-        console.error("Erro ao carregar estado do Supabase:", err);
+        payload.teamMembers = JSON.parse(savedTeam) as TeamMember[];
+      } catch (e) {
+        console.error("Failed to load team members", e);
       }
+    }
 
-      loadFromLocalStorage();
+    if (savedTimeOffs) {
+      try {
+        payload.timeOffs = JSON.parse(savedTimeOffs) as TimeOff[];
+      } catch (e) {
+        console.error("Failed to load time offs", e);
+      }
+    }
+
+    if (savedShiftSwaps) {
+      try {
+        payload.shiftSwaps = JSON.parse(savedShiftSwaps) as ShiftSwap[];
+      } catch (e) {
+        console.error("Failed to load shift swaps", e);
+      }
+    }
+
+    if (savedScales) {
+      try {
+        payload.scales = JSON.parse(savedScales) as Scale[];
+      } catch (e) {
+        console.error("Failed to load scales", e);
+      }
+    }
+
+    if (savedHolidays) {
+      try {
+        payload.holidays = JSON.parse(savedHolidays) as Holiday[];
+      } catch (e) {
+        console.error("Failed to load holidays", e);
+      }
+    }
+
+    applyStateFromPayload(payload);
+  };
+
+  const reloadFromSupabase = async () => {
+    try {
+      const dbState = await loadAppState();
+      if (dbState && Object.keys(dbState).length > 0) {
+        applyStateFromPayload(dbState);
+        return true;
+      }
+    } catch (err) {
+      console.error("Erro ao carregar estado do Supabase:", err);
+    }
+    return false;
+  };
+
+  // Load from Supabase (fallback to localStorage if empty)
+  useEffect(() => {
+    const init = async () => {
+      const loaded = await reloadFromSupabase();
+      if (!loaded) {
+        loadFromLocalStorage();
+      }
     };
 
     init();
@@ -610,6 +619,7 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         removeHoliday,
         isHolidayDate,
         replaceHolidays,
+        reloadFromSupabase,
       }}
     >
       {children}

@@ -1,4 +1,4 @@
-﻿export const handler = async (event) => {
+export const handler = async (event) => {
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method Not Allowed" };
   }
@@ -34,9 +34,9 @@
     return { statusCode: 400, body: JSON.stringify({ success: false, error: "Invalid JSON" }) };
   }
 
-  const data = body.data;
-  if (typeof data === "undefined") {
-    return { statusCode: 400, body: JSON.stringify({ success: false, error: "Missing data" }) };
+  const historyId = Number(body.historyId);
+  if (!Number.isFinite(historyId) || historyId <= 0) {
+    return { statusCode: 400, body: JSON.stringify({ success: false, error: "Missing historyId" }) };
   }
 
   const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -50,6 +50,28 @@
     apikey: SERVICE_KEY,
     Authorization: `Bearer ${SERVICE_KEY}`,
   };
+
+  const historyRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/app_state_history?id=eq.${historyId}&select=id,data`,
+    { headers: supabaseHeaders }
+  );
+  const historyText = await historyRes.text();
+  if (!historyRes.ok) {
+    return { statusCode: 500, body: JSON.stringify({ success: false, error: historyText }) };
+  }
+
+  let historyRows = [];
+  try {
+    historyRows = JSON.parse(historyText);
+  } catch {
+    return { statusCode: 500, body: JSON.stringify({ success: false, error: "Invalid history response" }) };
+  }
+
+  if (!Array.isArray(historyRows) || historyRows.length === 0) {
+    return { statusCode: 404, body: JSON.stringify({ success: false, error: "History not found" }) };
+  }
+
+  const historyData = historyRows[0]?.data ?? {};
 
   const currentRes = await fetch(
     `${SUPABASE_URL}/rest/v1/app_state?id=eq.1&select=data,updated_at`,
@@ -70,7 +92,7 @@
     currentData = {};
   }
 
-  const historyRes = await fetch(`${SUPABASE_URL}/rest/v1/app_state_history`, {
+  const historyBackupRes = await fetch(`${SUPABASE_URL}/rest/v1/app_state_history`, {
     method: "POST",
     headers: {
       ...supabaseHeaders,
@@ -80,40 +102,29 @@
     body: JSON.stringify({
       data: currentData ?? {},
       changed_by: "admin",
-      note: "auto backup before save",
+      note: "auto backup before restore",
     }),
   });
 
-  const historyText = await historyRes.text();
-  if (!historyRes.ok) {
-    return { statusCode: 500, body: JSON.stringify({ success: false, error: historyText }) };
+  const historyBackupText = await historyBackupRes.text();
+  if (!historyBackupRes.ok) {
+    return { statusCode: 500, body: JSON.stringify({ success: false, error: historyBackupText }) };
   }
 
-  let historyId = null;
-  try {
-    const rows = JSON.parse(historyText);
-    if (Array.isArray(rows) && rows.length > 0) {
-      historyId = rows[0]?.id ?? null;
-    }
-  } catch {
-    historyId = null;
-  }
-
-  const url = `${SUPABASE_URL}/rest/v1/app_state?id=eq.1`;
-  const res = await fetch(url, {
+  const updateRes = await fetch(`${SUPABASE_URL}/rest/v1/app_state?id=eq.1`, {
     method: "PATCH",
     headers: {
       ...supabaseHeaders,
       "Content-Type": "application/json",
       Prefer: "return=representation",
     },
-    body: JSON.stringify({ data }),
+    body: JSON.stringify({ data: historyData ?? {} }),
   });
 
-  const text = await res.text();
-  if (!res.ok) {
-    return { statusCode: 500, body: JSON.stringify({ success: false, error: text }) };
+  const updateText = await updateRes.text();
+  if (!updateRes.ok) {
+    return { statusCode: 500, body: JSON.stringify({ success: false, error: updateText }) };
   }
 
-  return { statusCode: 200, body: JSON.stringify({ success: true, history_id: historyId }) };
+  return { statusCode: 200, body: JSON.stringify({ success: true }) };
 };
