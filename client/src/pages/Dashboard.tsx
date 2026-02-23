@@ -20,6 +20,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Layout from "@/components/Layout";
+import ExportButtons from "@/components/ExportButtons";
 import { getScheduledPerson, isWorkingDay, getActiveScaleForDate } from "@/lib/scheduleCalculator";
 import { useSchedule } from "@/contexts/ScheduleContext";
 import { isAdmin } from "@/auth/adminAuth";
@@ -699,7 +700,7 @@ export default function Dashboard() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Calendar Section */}
-          <div className="lg:col-span-2">
+          <div className="lg:col-span-2" id="calendar-export">
             {/* Month Navigation */}
             <div className="flex items-center justify-between mb-6">
               <Button variant="outline" size="sm" onClick={handlePrevMonth} className="gap-2">
@@ -873,8 +874,19 @@ export default function Dashboard() {
               </Button>
 
               {admin && (
-                <div className="flex justify-end mb-4">
+                <div className="flex flex-wrap items-center justify-end gap-2 mb-4">
                   <HistoryModal reloadState={reloadFromSupabase} />
+                  <ExportButtons
+                    calendarElementId="calendar-export"
+                    year={currentYear}
+                    month={currentMonth}
+                    teamMembers={teamMembers}
+                    scales={scales}
+                    timeOffs={timeOffs}
+                    holidays={holidays}
+                    shiftSwaps={shiftSwaps}
+                    isPersonOnTimeOff={isPersonOnTimeOff}
+                  />
                 </div>
               )}
 
