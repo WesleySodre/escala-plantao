@@ -22,15 +22,11 @@ import { Label } from "@/components/ui/label";
 import Layout from "@/components/Layout";
 import { getScheduledPerson, isWorkingDay, getActiveScaleForDate } from "@/lib/scheduleCalculator";
 import { useSchedule } from "@/contexts/ScheduleContext";
-import { adminLogout, getAdminJwt, isAdmin } from "@/auth/adminAuth";
+import { isAdmin } from "@/auth/adminAuth";
+import HistoryModal from "@/components/HistoryModal";
 import { ChevronLeft, ChevronRight, Plus, Trash2, GripVertical } from "lucide-react";
 import { useEffect, useState, type DragEvent } from "react";
 import { toast } from "sonner";
-
-type HistoryItem = {
-  id: number;
-  created_at: string;
-};
 
 export default function Dashboard() {
   const admin = isAdmin();
@@ -42,10 +38,6 @@ export default function Dashboard() {
   const [reorderList, setReorderList] = useState<string[]>([]);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [rotationTarget, setRotationTarget] = useState<string>("all");
-  const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyError, setHistoryError] = useState<string | null>(null);
-  const [restoringId, setRestoringId] = useState<number | null>(null);
 
   const {
     teamMembers,
@@ -184,114 +176,6 @@ export default function Dashboard() {
   const sortedScales = [...scales].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const activeMemberIds = activeTeamMembers.map((member) => member.id);
 
-  const handleAdminExpired = () => {
-    adminLogout();
-    alert("Sessao expirada. Entre como admin novamente.");
-  };
-
-  const formatHistoryDateTime = (value: string) => {
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) return value;
-    return new Intl.DateTimeFormat("pt-BR", {
-      dateStyle: "short",
-      timeStyle: "short",
-    }).format(parsed);
-  };
-
-  const fetchHistory = async () => {
-    if (!admin) return;
-    const token = getAdminJwt();
-    if (!token) {
-      handleAdminExpired();
-      return;
-    }
-
-    setHistoryLoading(true);
-    setHistoryError(null);
-
-    try {
-      const res = await fetch("/.netlify/functions/list-history", {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      if (res.status === 401) {
-        handleAdminExpired();
-        return;
-      }
-
-      if (!res.ok) {
-        const text = await res.text();
-        console.error("Erro ao carregar historico:", text);
-        setHistoryError("Nao foi possivel carregar o historico.");
-        return;
-      }
-
-      const payload = await res.json();
-      const items = Array.isArray(payload?.items) ? payload.items : [];
-      setHistoryItems(items);
-    } catch (err) {
-      console.error("Erro ao carregar historico:", err);
-      setHistoryError("Nao foi possivel carregar o historico.");
-    } finally {
-      setHistoryLoading(false);
-    }
-  };
-
-  const handleRestoreHistory = async (historyId: number) => {
-    if (!admin) return;
-    const token = getAdminJwt();
-    if (!token) {
-      handleAdminExpired();
-      return;
-    }
-
-    const confirmed = window.confirm(
-      "Restaurar esta versao? Isso substituira o estado atual."
-    );
-    if (!confirmed) return;
-
-    setRestoringId(historyId);
-
-    try {
-      const res = await fetch("/.netlify/functions/restore-history", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ historyId }),
-      });
-
-      if (res.status === 401) {
-        handleAdminExpired();
-        return;
-      }
-
-      if (!res.ok) {
-        const text = await res.text();
-        console.error("Erro ao restaurar historico:", text);
-        toast.error("Nao foi possivel restaurar a versao.");
-        return;
-      }
-
-      const loaded = await reloadFromSupabase();
-      if (!loaded) {
-        toast.error("Versao restaurada, mas nao foi possivel recarregar o estado.");
-      } else {
-        toast.success("Versao restaurada.");
-      }
-
-      await fetchHistory();
-    } catch (err) {
-      console.error("Erro ao restaurar historico:", err);
-      toast.error("Nao foi possivel restaurar a versao.");
-    } finally {
-      setRestoringId(null);
-    }
-  };
-
   useEffect(() => {
     if (
       selectedPerson !== "all" &&
@@ -301,17 +185,6 @@ export default function Dashboard() {
     }
   }, [activeTeamMembers, selectedPerson]);
 
-  useEffect(() => {
-    if (!admin) {
-      setHistoryItems([]);
-      setHistoryError(null);
-      setHistoryLoading(false);
-      setRestoringId(null);
-      return;
-    }
-
-    fetchHistory();
-  }, [admin]);
 
   const normalizeName = (value: string) => {
     return value
@@ -999,6 +872,12 @@ export default function Dashboard() {
                 Organizar Rotação
               </Button>
 
+              {admin && (
+                <div className="flex justify-end mb-4">
+                  <HistoryModal reloadState={reloadFromSupabase} />
+                </div>
+              )}
+
               {/* Team List */}
               <div className="space-y-2 max-h-96 overflow-y-auto">
                   {activeTeamMembers.map((member) => (
@@ -1561,53 +1440,6 @@ export default function Dashboard() {
               )}
             </div>
 
-            {admin && (
-              <div className="border border-border rounded-lg p-6 bg-card shadow-sm">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-semibold text-foreground">HistÃ³rico</h3>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={fetchHistory}
-                    disabled={historyLoading}
-                  >
-                    Atualizar
-                  </Button>
-                </div>
-
-                {historyLoading ? (
-                  <p className="text-sm text-muted-foreground">Carregando histÃ³rico...</p>
-                ) : historyError ? (
-                  <p className="text-sm text-destructive">{historyError}</p>
-                ) : historyItems.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Nenhuma versÃ£o registrada</p>
-                ) : (
-                  <div className="space-y-2 max-h-96 overflow-y-auto">
-                    {historyItems.map((item) => (
-                      <div
-                        key={item.id}
-                        className="flex items-center justify-between p-3 bg-secondary rounded-lg"
-                      >
-                        <div className="flex-1">
-                          <div className="text-sm font-medium text-foreground">
-                            {formatHistoryDateTime(item.created_at)}
-                          </div>
-                          <div className="text-xs text-muted-foreground">ID {item.id}</div>
-                        </div>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleRestoreHistory(item.id)}
-                          disabled={restoringId === item.id}
-                        >
-                          {restoringId === item.id ? "Restaurando..." : "Restaurar"}
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         </div>
       </div>
