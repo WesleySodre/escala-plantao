@@ -9,6 +9,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -38,6 +45,19 @@ const WEEKDAY_OPTIONS = [
 
 const ALL_WEEKDAYS = [1, 2, 3, 4, 5];
 
+const COMPENSATION_OPTIONS = [
+  { value: "previous", label: "Anterior" },
+  { value: "next", label: "Posterior" },
+  { value: "nearest", label: "Mais próximo" },
+] as const;
+
+const DEFAULT_AUTO_FRIDAY_SWAP = {
+  enabled: false,
+  queueMemberIds: [] as string[],
+  queuePointer: 0,
+  compensationMode: "next" as const,
+};
+
 export default function Scales() {
   const admin = isAdmin();
   const {
@@ -59,6 +79,12 @@ export default function Scales() {
   const [scaleRotationOrder, setScaleRotationOrder] = useState<string[]>([]);
   const [scaleActive, setScaleActive] = useState(true);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [autoFridayEnabled, setAutoFridayEnabled] = useState(false);
+  const [autoFridayQueue, setAutoFridayQueue] = useState<string[]>([]);
+  const [autoFridayCompensationMode, setAutoFridayCompensationMode] = useState<
+    "previous" | "next" | "nearest"
+  >("next");
+  const [queueDragIndex, setQueueDragIndex] = useState<number | null>(null);
 
   const memberById = useMemo(() => {
     return new Map(teamMembers.map((member) => [member.id, member]));
@@ -127,6 +153,19 @@ export default function Scales() {
     return [...filtered, ...missing];
   };
 
+  const normalizeQueueOrder = (order: string[]) => {
+    const memberIds = activeMembersToday.map((member) => member.id);
+    const seen = new Set<string>();
+    const filtered = order.filter((id) => {
+      if (!memberIds.includes(id)) return false;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+    const missing = memberIds.filter((id) => !seen.has(id));
+    return [...filtered, ...missing];
+  };
+
   const getUncoveredWeekdays = (nextScales: Scale[]) => {
     const covered = new Set<number>();
     nextScales
@@ -168,15 +207,32 @@ export default function Scales() {
     setScaleWeekdays([]);
     setScaleRotationOrder(activeMembersToday.map((member) => member.id));
     setScaleActive(true);
+    setAutoFridayEnabled(false);
+    setAutoFridayQueue(activeMembersToday.map((member) => member.id));
+    setAutoFridayCompensationMode("next");
     setShowScaleDialog(true);
   };
 
   const openEditDialog = (scale: Scale) => {
+    const autoFriday = scale.autoFridaySwap ?? DEFAULT_AUTO_FRIDAY_SWAP;
+    const queueSeed =
+      autoFriday.queueMemberIds.length > 0
+        ? autoFriday.queueMemberIds
+        : activeMembersToday.map((member) => member.id);
     setEditingScaleId(scale.id);
     setScaleName(scale.name);
     setScaleWeekdays([...scale.weekdays]);
     setScaleRotationOrder(normalizeRotationOrder(scale.rotationMemberIds));
     setScaleActive(scale.isActive);
+    setAutoFridayEnabled(autoFriday.enabled);
+    setAutoFridayQueue(normalizeQueueOrder(queueSeed));
+    setAutoFridayCompensationMode(
+      autoFriday.compensationMode === "previous" ||
+        autoFriday.compensationMode === "next" ||
+        autoFriday.compensationMode === "nearest"
+        ? autoFriday.compensationMode
+        : "next"
+    );
     setShowScaleDialog(true);
   };
 
@@ -192,6 +248,21 @@ export default function Scales() {
     }
     const normalizedWeekdays = Array.from(new Set(scaleWeekdays)).sort((a, b) => a - b);
     const normalizedRotation = normalizeRotationOrder(scaleRotationOrder);
+    const normalizedQueue = normalizeQueueOrder(autoFridayQueue);
+    const existingPointer = editingScaleId
+      ? scales.find((scale) => scale.id === editingScaleId)?.autoFridaySwap?.queuePointer ?? 0
+      : 0;
+    const normalizedPointer =
+      normalizedQueue.length > 0
+        ? ((existingPointer % normalizedQueue.length) + normalizedQueue.length) %
+          normalizedQueue.length
+        : 0;
+    const autoFridaySwap: Scale["autoFridaySwap"] = {
+      enabled: autoFridayEnabled,
+      queueMemberIds: normalizedQueue,
+      queuePointer: normalizedPointer,
+      compensationMode: autoFridayCompensationMode,
+    };
     if (normalizedRotation.length === 0) {
       toast.error("Selecione pelo menos um membro na rotação");
       return;
@@ -210,6 +281,7 @@ export default function Scales() {
         weekdays: normalizedWeekdays,
         rotationMemberIds: normalizedRotation,
         isActive: scaleActive,
+        autoFridaySwap,
       };
       const nextScales = scales.map((scale) =>
         scale.id === editingScaleId ? { ...scale, ...updates } : scale
@@ -228,6 +300,10 @@ export default function Scales() {
         createdAt: today,
         anchorDate: today,
         anchorMemberId: normalizedRotation[0],
+        autoFridaySwap: {
+          ...autoFridaySwap,
+          queuePointer: 0,
+        },
       };
       const nextScales = [...scales, newScale];
       addScale(newScale);
@@ -311,6 +387,35 @@ export default function Scales() {
 
   const handleDragEnd = () => {
     setDragIndex(null);
+  };
+
+  const handleQueueDragStart =
+    (index: number) => (event: DragEvent<HTMLDivElement>) => {
+      setQueueDragIndex(index);
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", String(index));
+    };
+
+  const handleQueueDrop =
+    (index: number) => (event: DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const fromIndex =
+        queueDragIndex ?? Number(event.dataTransfer.getData("text/plain"));
+      if (Number.isNaN(fromIndex) || fromIndex === index) {
+        setQueueDragIndex(null);
+        return;
+      }
+      setAutoFridayQueue((prev) => {
+        const next = [...prev];
+        const [moved] = next.splice(fromIndex, 1);
+        next.splice(index, 0, moved);
+        return next;
+      });
+      setQueueDragIndex(null);
+    };
+
+  const handleQueueDragEnd = () => {
+    setQueueDragIndex(null);
   };
 
   return (
@@ -528,6 +633,83 @@ export default function Scales() {
                       </div>
                     );
                   })}
+                </div>
+              </div>
+              <div className="space-y-3 border-t border-border/60 pt-4">
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    checked={autoFridayEnabled}
+                    onCheckedChange={(checked) => setAutoFridayEnabled(checked === true)}
+                    disabled={!admin}
+                  />
+                  <span className="text-sm font-medium">
+                    Ativar troca automática na sexta
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Quando o titular não pode sexta, o sistema troca com a lista paralela
+                  e compensa em outro dia.
+                </p>
+                <div className="space-y-2">
+                  <Label>Lista paralela (ordem dos substitutos)</Label>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {autoFridayQueue.length === 0 ? (
+                      <div className="text-xs text-muted-foreground">
+                        Nenhum membro na lista paralela.
+                      </div>
+                    ) : (
+                      autoFridayQueue.map((memberId, index) => {
+                        const member = memberById.get(memberId);
+                        return (
+                          <div
+                            key={memberId}
+                            draggable={admin}
+                            onDragStart={handleQueueDragStart(index)}
+                            onDragOver={handleDragOver}
+                            onDrop={handleQueueDrop(index)}
+                            onDragEnd={handleQueueDragEnd}
+                            className={`flex items-center justify-between p-3 bg-secondary rounded-lg border border-border cursor-move ${
+                              queueDragIndex === index ? "opacity-60" : ""
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <GripVertical size={16} className="text-muted-foreground" />
+                              <span className="text-sm font-medium text-foreground">
+                                {member?.name ?? "Membro"}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>Modo de compensação</Label>
+                  <Select
+                    value={autoFridayCompensationMode}
+                    onValueChange={(value) =>
+                      setAutoFridayCompensationMode(
+                        value as "previous" | "next" | "nearest"
+                      )
+                    }
+                    disabled={!admin}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecione o modo" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {COMPENSATION_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Anterior = último plantão do substituto, Posterior = próximo, Mais próximo
+                    escolhe o mais perto.
+                  </p>
                 </div>
               </div>
               <div className="flex items-center gap-2">

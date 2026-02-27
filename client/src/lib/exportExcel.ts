@@ -5,7 +5,7 @@ import type {
   TeamMember,
   TimeOff,
 } from "@/contexts/ScheduleContext";
-import { getScheduledPerson, isHoliday, isWorkingDay } from "@/lib/scheduleCalculator";
+import { getMonthSchedule, isHoliday, isWorkingDay } from "@/lib/scheduleCalculator";
 
 type ExportExcelOptions = {
   year: number;
@@ -71,6 +71,18 @@ export async function exportCalendarToExcel({
   const XLSX = await import("xlsx");
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const holidayDates = holidays.map((holiday) => holiday.date);
+  const monthSchedule = getMonthSchedule(
+    year,
+    month,
+    teamMembers,
+    scales,
+    isPersonOnTimeOff,
+    holidayDates,
+    shiftSwaps
+  );
+  const scheduleByDate = new Map(
+    monthSchedule.map((item) => [dateToYMD(item.date), item])
+  );
 
   const rows = Array.from({ length: daysInMonth }, (_, index) => {
     const day = index + 1;
@@ -80,14 +92,7 @@ export async function exportCalendarToExcel({
     const workingDay = isWorkingDay(date, holidayDates);
     const holidayDay = isHoliday(date, holidayDates);
 
-    const scheduleInfo = getScheduledPerson(
-      date,
-      teamMembers,
-      scales,
-      isPersonOnTimeOff,
-      holidayDates,
-      shiftSwaps
-    );
+    const scheduleInfo = scheduleByDate.get(dateStr);
 
     let plantonista = "";
     let substituto = "";

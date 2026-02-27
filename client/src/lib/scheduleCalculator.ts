@@ -24,6 +24,20 @@ export interface ScheduleInfo {
   swapReason?: string;
 }
 
+type Assignment = {
+  person: TeamMember;
+  original: TeamMember;
+  date: Date;
+  dayOfWeek: number;
+  scale: Scale;
+  isHoliday: boolean;
+  swapReason?: string;
+};
+
+type AutoFridaySwapConfig = NonNullable<Scale["autoFridaySwap"]>;
+
+const AUTO_FRIDAY_SWAP_REASON = "Troca automática de sexta";
+
 // Feriados e suspensoes de expediente em 2026
 export const HOLIDAYS_2026 = [
   // Formato: "YYYY-MM-DD"
@@ -78,6 +92,10 @@ function dateToString(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+function getDayLabel(dayOfWeek: number): string {
+  return ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"][dayOfWeek] ?? "";
+}
+
 function dateFromString(value: string): Date | null {
   if (!value) return null;
   const [year, month, day] = value.split("-").map(Number);
@@ -93,6 +111,10 @@ function isBeforeCutoff(date: Date): boolean {
   const cutoff = dateFromString(SCHEDULE_CUTOFF_DATE);
   if (!cutoff) return false;
   return normalizeDate(date) < cutoff;
+}
+
+function getScheduleStartDate(): Date {
+  return dateFromString(SCHEDULE_CUTOFF_DATE) ?? new Date(2026, 1, 14);
 }
 
 function isSameDate(a: Date, b: Date): boolean {
@@ -235,6 +257,43 @@ export function getActiveScaleForDate(date: Date, scales: Scale[]): Scale | null
   return match ?? null;
 }
 
+const DEFAULT_AUTO_FRIDAY_SWAP: AutoFridaySwapConfig = {
+  enabled: false,
+  queueMemberIds: [],
+  queuePointer: 0,
+  compensationMode: "next",
+};
+
+function normalizeAutoFridaySwapConfig(
+  config: Scale["autoFridaySwap"] | undefined,
+  memberIds: Set<string>
+): AutoFridaySwapConfig {
+  const base = { ...DEFAULT_AUTO_FRIDAY_SWAP, ...(config ?? {}) };
+  const queueMemberIds = Array.isArray(base.queueMemberIds)
+    ? base.queueMemberIds.filter(
+        (id, index, list) => memberIds.has(id) && list.indexOf(id) === index
+      )
+    : [];
+  const pointer = Number.isFinite(base.queuePointer) ? base.queuePointer : 0;
+  const normalizedPointer =
+    queueMemberIds.length > 0
+      ? ((pointer % queueMemberIds.length) + queueMemberIds.length) %
+        queueMemberIds.length
+      : 0;
+  const compensationMode =
+    base.compensationMode === "previous" ||
+    base.compensationMode === "next" ||
+    base.compensationMode === "nearest"
+      ? base.compensationMode
+      : "next";
+  return {
+    enabled: Boolean(base.enabled),
+    queueMemberIds,
+    queuePointer: normalizedPointer,
+    compensationMode,
+  };
+}
+
 /**
  * Calcula o deslocamento de dias da escala entre uma ancora e a data alvo
  */
@@ -372,16 +431,15 @@ function getAssignmentWithAdvancement(
 }
 
 /**
- * Obtem a pessoa escalada para uma data especifica
+ * Obtem o plantao base (sem trocas manuais e sem troca automatica de sexta).
  */
-export function getScheduledPerson(
+function getBaseAssignment(
   date: Date,
   teamMembers: TeamMember[],
   scales: Scale[],
   isPersonOnTimeOff?: (person: string, dateStr: string) => boolean,
-  holidays?: string[],
-  shiftSwaps?: ShiftSwap[]
-): ScheduleInfo | null {
+  holidays?: string[]
+): Assignment | null {
   const targetDate = normalizeDate(date);
   const dayOfWeek = targetDate.getDay();
   const isHolidayDate = isHoliday(targetDate, holidays);
@@ -459,38 +517,303 @@ export function getScheduledPerson(
     originalPerson = assignment.original;
   }
 
-  if (shiftSwaps && shiftSwaps.length > 0) {
-    const dateStr = dateToString(targetDate);
-    const swap = shiftSwaps.find((entry) => entry.date === dateStr);
-    if (swap) {
-      const substituteMember = findMemberByName(eligibleMembers, swap.substitutePerson);
-      if (substituteMember) {
-        const originalLabel = findMemberByName(eligibleMembers, swap.originalPerson)
-          ? swap.originalPerson
-          : originalPerson.name;
-        return {
-          person: substituteMember.name,
-          originalPerson: originalLabel,
-          date: new Date(targetDate),
-          dayOfWeek: ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"][dayOfWeek],
-          scaleId: activeScale.id,
-          scaleName: activeScale.name,
-          isHoliday: isHolidayDate,
-          swapReason: swap.reason,
-        };
+  return {
+    person,
+    original: originalPerson,
+    date: new Date(targetDate),
+    dayOfWeek,
+    scale: activeScale,
+    isHoliday: isHolidayDate,
+  };
+}
+
+const MAX_COMPENSATION_LOOKUP_DAYS = 370;
+
+function searchCompensationDate(
+  startDate: Date,
+  direction: -1 | 1,
+  substituteId: string,
+  teamMembers: TeamMember[],
+  scales: Scale[],
+  isPersonOnTimeOff?: (person: string, dateStr: string) => boolean,
+  holidays?: string[]
+): Date | null {
+  const cursor = new Date(startDate);
+  let safety = 0;
+
+  while (safety < MAX_COMPENSATION_LOOKUP_DAYS) {
+    cursor.setDate(cursor.getDate() + direction);
+    const assignment = getBaseAssignment(cursor, teamMembers, scales, isPersonOnTimeOff, holidays);
+    if (assignment && assignment.person.id === substituteId) {
+      return new Date(cursor);
+    }
+    safety += 1;
+  }
+
+  return null;
+}
+
+function findCompensationDate(
+  fridayDate: Date,
+  substituteId: string,
+  mode: AutoFridaySwapConfig["compensationMode"],
+  teamMembers: TeamMember[],
+  scales: Scale[],
+  isPersonOnTimeOff?: (person: string, dateStr: string) => boolean,
+  holidays?: string[]
+): Date | null {
+  if (mode === "previous") {
+    return searchCompensationDate(
+      fridayDate,
+      -1,
+      substituteId,
+      teamMembers,
+      scales,
+      isPersonOnTimeOff,
+      holidays
+    );
+  }
+
+  if (mode === "next") {
+    return searchCompensationDate(
+      fridayDate,
+      1,
+      substituteId,
+      teamMembers,
+      scales,
+      isPersonOnTimeOff,
+      holidays
+    );
+  }
+
+  const previous = searchCompensationDate(
+    fridayDate,
+    -1,
+    substituteId,
+    teamMembers,
+    scales,
+    isPersonOnTimeOff,
+    holidays
+  );
+  const next = searchCompensationDate(
+    fridayDate,
+    1,
+    substituteId,
+    teamMembers,
+    scales,
+    isPersonOnTimeOff,
+    holidays
+  );
+
+  if (previous && next) {
+    const prevDistance = Math.abs(
+      normalizeDate(fridayDate).getTime() - normalizeDate(previous).getTime()
+    );
+    const nextDistance = Math.abs(
+      normalizeDate(next).getTime() - normalizeDate(fridayDate).getTime()
+    );
+    return prevDistance <= nextDistance ? previous : next;
+  }
+
+  return previous ?? next ?? null;
+}
+
+function applyShiftSwapsToAssignments(
+  assignments: Map<string, Assignment>,
+  teamMembers: TeamMember[],
+  shiftSwaps: ShiftSwap[]
+) {
+  shiftSwaps.forEach((swap) => {
+    const parsedDate = dateFromString(swap.date);
+    if (!parsedDate) return;
+    const dateStr = dateToString(parsedDate);
+    const current = assignments.get(dateStr);
+    if (!current) return;
+
+    const rotationOrder = getRotationOrderForDate(parsedDate, teamMembers, current.scale);
+    const eligibleMembers = getEligibleMembers(rotationOrder, parsedDate);
+    const substituteMember = findMemberByName(eligibleMembers, swap.substitutePerson);
+    if (!substituteMember) return;
+
+    const originalMember =
+      findMemberByName(eligibleMembers, swap.originalPerson) ?? current.original;
+
+    assignments.set(dateStr, {
+      ...current,
+      person: substituteMember,
+      original: originalMember,
+      swapReason: swap.reason,
+    });
+  });
+}
+
+function assignmentToScheduleInfo(assignment: Assignment): ScheduleInfo {
+  return {
+    person: assignment.person.name,
+    originalPerson: assignment.original.name,
+    date: new Date(assignment.date),
+    dayOfWeek: getDayLabel(assignment.dayOfWeek),
+    scaleId: assignment.scale.id,
+    scaleName: assignment.scale.name,
+    isHoliday: assignment.isHoliday,
+    swapReason: assignment.swapReason,
+  };
+}
+
+/**
+ * Monta o mapa de escala considerando troca automática de sexta e trocas manuais.
+ */
+function buildScheduleMap(
+  startDate: Date,
+  endDate: Date,
+  teamMembers: TeamMember[],
+  scales: Scale[],
+  isPersonOnTimeOff?: (person: string, dateStr: string) => boolean,
+  holidays?: string[],
+  shiftSwaps?: ShiftSwap[]
+): Map<string, ScheduleInfo> {
+  const normalizedStart = normalizeDate(startDate);
+  const normalizedEnd = normalizeDate(endDate);
+  if (normalizedEnd < normalizedStart) {
+    return new Map();
+  }
+
+  const memberById = new Map(teamMembers.map((member) => [member.id, member]));
+  const memberIds = new Set(memberById.keys());
+  const baseAssignments = new Map<string, Assignment>();
+
+  for (
+    let cursor = new Date(normalizedStart);
+    cursor <= normalizedEnd;
+    cursor.setDate(cursor.getDate() + 1)
+  ) {
+    const base = getBaseAssignment(cursor, teamMembers, scales, isPersonOnTimeOff, holidays);
+    if (base) {
+      baseAssignments.set(dateToString(cursor), base);
+    }
+  }
+
+  const effectiveAssignments = new Map<string, Assignment>();
+  baseAssignments.forEach((value, key) => {
+    effectiveAssignments.set(key, { ...value });
+  });
+
+  const swapState = new Map<
+    string,
+    { config: AutoFridaySwapConfig; pointer: number }
+  >();
+  scales.forEach((scale) => {
+    const config = normalizeAutoFridaySwapConfig(scale.autoFridaySwap, memberIds);
+    swapState.set(scale.id, { config, pointer: config.queuePointer });
+  });
+
+  for (
+    let cursor = new Date(normalizedStart);
+    cursor <= normalizedEnd;
+    cursor.setDate(cursor.getDate() + 1)
+  ) {
+    if (cursor.getDay() !== 5) continue;
+
+    const dateStr = dateToString(cursor);
+    const base = baseAssignments.get(dateStr);
+    if (!base) continue;
+
+    const state = swapState.get(base.scale.id);
+    if (!state || !state.config.enabled) continue;
+
+    const queue = state.config.queueMemberIds;
+    if (queue.length === 0) continue;
+
+    const titular = base.person;
+    if (titular.canDoFriday !== false) continue;
+
+    const substituteId = queue[state.pointer];
+    const substitute = memberById.get(substituteId);
+    if (!substitute) continue;
+    if (!isMemberActive(substitute, cursor)) continue;
+    if (!memberWorksOnDay(substitute, 5)) continue;
+
+    const compensationDate = findCompensationDate(
+      cursor,
+      substituteId,
+      state.config.compensationMode,
+      teamMembers,
+      scales,
+      isPersonOnTimeOff,
+      holidays
+    );
+    if (!compensationDate) continue;
+
+    state.pointer = (state.pointer + 1) % queue.length;
+
+    effectiveAssignments.set(dateStr, {
+      ...base,
+      person: substitute,
+      original: titular,
+      swapReason: AUTO_FRIDAY_SWAP_REASON,
+    });
+
+    if (compensationDate >= normalizedStart && compensationDate <= normalizedEnd) {
+      const compStr = dateToString(compensationDate);
+      const compensationBase =
+        baseAssignments.get(compStr) ??
+        getBaseAssignment(compensationDate, teamMembers, scales, isPersonOnTimeOff, holidays);
+      if (compensationBase) {
+        effectiveAssignments.set(compStr, {
+          ...compensationBase,
+          person: titular,
+          original: substitute,
+          swapReason: AUTO_FRIDAY_SWAP_REASON,
+        });
       }
     }
   }
 
-  return {
-    person: person.name,
-    originalPerson: originalPerson.name,
-    date: new Date(targetDate),
-    dayOfWeek: ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"][dayOfWeek],
-    scaleId: activeScale.id,
-    scaleName: activeScale.name,
-    isHoliday: isHolidayDate,
-  };
+  if (shiftSwaps && shiftSwaps.length > 0) {
+    applyShiftSwapsToAssignments(effectiveAssignments, teamMembers, shiftSwaps);
+  }
+
+  const result = new Map<string, ScheduleInfo>();
+  effectiveAssignments.forEach((assignment, key) => {
+    result.set(key, assignmentToScheduleInfo(assignment));
+  });
+
+  return result;
+}
+
+/**
+ * Obtem a pessoa escalada para uma data especifica
+ */
+export function getScheduledPerson(
+  date: Date,
+  teamMembers: TeamMember[],
+  scales: Scale[],
+  isPersonOnTimeOff?: (person: string, dateStr: string) => boolean,
+  holidays?: string[],
+  shiftSwaps?: ShiftSwap[]
+): ScheduleInfo | null {
+  const targetDate = normalizeDate(date);
+
+  if (isBeforeCutoff(targetDate)) {
+    return null;
+  }
+
+  const startDate = getScheduleStartDate();
+  if (targetDate < startDate) {
+    return null;
+  }
+
+  const scheduleMap = buildScheduleMap(
+    startDate,
+    targetDate,
+    teamMembers,
+    scales,
+    isPersonOnTimeOff,
+    holidays,
+    shiftSwaps
+  );
+
+  return scheduleMap.get(dateToString(targetDate)) ?? null;
 }
 
 /**
@@ -507,20 +830,21 @@ export function getMonthSchedule(
 ): ScheduleInfo[] {
   const schedule: ScheduleInfo[] = [];
   const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const monthEnd = new Date(year, month, daysInMonth);
+  const scheduleMap = buildScheduleMap(
+    getScheduleStartDate(),
+    monthEnd,
+    teamMembers,
+    scales,
+    isPersonOnTimeOff,
+    holidays,
+    shiftSwaps
+  );
 
   for (let day = 1; day <= daysInMonth; day++) {
     const date = new Date(year, month, day);
-    const scheduleInfo = getScheduledPerson(
-      date,
-      teamMembers,
-      scales,
-      isPersonOnTimeOff,
-      holidays,
-      shiftSwaps
-    );
-    if (scheduleInfo) {
-      schedule.push(scheduleInfo);
-    }
+    const scheduleInfo = scheduleMap.get(dateToString(date));
+    if (scheduleInfo) schedule.push(scheduleInfo);
   }
 
   return schedule;
@@ -539,24 +863,27 @@ export function getNextWorkingDays(
   shiftSwaps?: ShiftSwap[]
 ): ScheduleInfo[] {
   const schedule: ScheduleInfo[] = [];
-  let currentDate = new Date(startDate);
+  const normalizedStart = normalizeDate(startDate);
+  let currentDate = new Date(normalizedStart);
   currentDate.setDate(currentDate.getDate() + 1);
 
   let safety = 0;
   const safetyLimit = 370;
+  const rangeEnd = new Date(normalizedStart);
+  rangeEnd.setDate(rangeEnd.getDate() + safetyLimit);
+  const scheduleMap = buildScheduleMap(
+    getScheduleStartDate(),
+    rangeEnd,
+    teamMembers,
+    scales,
+    isPersonOnTimeOff,
+    holidays,
+    shiftSwaps
+  );
 
   while (schedule.length < count && safety < safetyLimit) {
-    const scheduleInfo = getScheduledPerson(
-      currentDate,
-      teamMembers,
-      scales,
-      isPersonOnTimeOff,
-      holidays,
-      shiftSwaps
-    );
-    if (scheduleInfo) {
-      schedule.push(scheduleInfo);
-    }
+    const scheduleInfo = scheduleMap.get(dateToString(currentDate));
+    if (scheduleInfo) schedule.push(scheduleInfo);
     currentDate.setDate(currentDate.getDate() + 1);
     safety++;
   }

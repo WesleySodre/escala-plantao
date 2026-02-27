@@ -21,13 +21,25 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Layout from "@/components/Layout";
 import ExportButtons from "@/components/ExportButtons";
-import { getScheduledPerson, isWorkingDay, getActiveScaleForDate } from "@/lib/scheduleCalculator";
+import {
+  getScheduledPerson,
+  getMonthSchedule,
+  isWorkingDay,
+  getActiveScaleForDate,
+} from "@/lib/scheduleCalculator";
 import { useSchedule } from "@/contexts/ScheduleContext";
 import { isAdmin } from "@/auth/adminAuth";
 import HistoryModal from "@/components/HistoryModal";
 import { ChevronLeft, ChevronRight, Plus, Trash2, GripVertical } from "lucide-react";
-import { useEffect, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useState, type DragEvent } from "react";
 import { toast } from "sonner";
+
+const dateKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
 
 export default function Dashboard() {
   const admin = isAdmin();
@@ -45,6 +57,7 @@ export default function Dashboard() {
     addTeamMember,
     removeTeamMember,
     updateTeamMemberWorkDays,
+    updateTeamMemberCanDoFriday,
     isPersonOnTimeOff,
     addTimeOff,
     removeTimeOff,
@@ -80,6 +93,7 @@ export default function Dashboard() {
   const [showWorkDaysDialog, setShowWorkDaysDialog] = useState(false);
   const [memberToEditWorkDays, setMemberToEditWorkDays] = useState<string | null>(null);
   const [workDaysSelection, setWorkDaysSelection] = useState<number[]>([1, 2, 3, 4, 5]);
+  const [canDoFridaySelection, setCanDoFridaySelection] = useState(true);
 
   const workDayOptions = [
     { value: 1, label: "Seg" },
@@ -160,12 +174,32 @@ export default function Dashboard() {
   const timeOffReturnDate = getReturnDateForTimeOff();
   const timeOffReturnDateInput = timeOffReturnDate ? formatDateInput(timeOffReturnDate) : "";
   const timeOffReturnDateLabel = timeOffReturnDate ? formatDateDisplay(timeOffReturnDate) : "";
-  const holidayDates = holidays.map((h) => h.date);
+  const holidayDates = useMemo(() => holidays.map((h) => h.date), [holidays]);
   const sortedShiftSwaps = [...shiftSwaps].sort((a, b) => a.date.localeCompare(b.date));
   const parsedSwapDate = parseDateInput(swapDate);
   const isSwapWorkingDay = parsedSwapDate ? isWorkingDay(parsedSwapDate, holidayDates) : true;
   const swapScale = parsedSwapDate ? getActiveScaleForDate(parsedSwapDate, scales) : null;
   const isSwapScaleConfigured = parsedSwapDate ? Boolean(swapScale) : true;
+  const monthSchedule = useMemo(
+    () =>
+      getMonthSchedule(
+        currentYear,
+        currentMonth,
+        teamMembers,
+        scales,
+        isPersonOnTimeOff,
+        holidayDates,
+        shiftSwaps
+      ),
+    [currentYear, currentMonth, teamMembers, scales, isPersonOnTimeOff, holidayDates, shiftSwaps]
+  );
+  const scheduleByDate = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof getMonthSchedule>[number]>();
+    monthSchedule.forEach((item) => {
+      map.set(dateKey(item.date), item);
+    });
+    return map;
+  }, [monthSchedule]);
 
   const activeTeamMembers = teamMembers.filter((member) => {
     if (!member.removeDate) return true;
@@ -441,6 +475,7 @@ export default function Dashboard() {
     if (!member) return;
     setMemberToEditWorkDays(member.id);
     setWorkDaysSelection(Array.isArray(member.workDays) ? member.workDays : [1, 2, 3, 4, 5]);
+    setCanDoFridaySelection(member.canDoFriday !== false);
     setShowWorkDaysDialog(true);
   };
 
@@ -465,6 +500,7 @@ export default function Dashboard() {
     }
     const sortedDays = [...workDaysSelection].sort((a, b) => a - b);
     updateTeamMemberWorkDays(memberToEditWorkDaysData.id, sortedDays);
+    updateTeamMemberCanDoFriday(memberToEditWorkDaysData.id, canDoFridaySelection);
     setShowWorkDaysDialog(false);
     setMemberToEditWorkDays(null);
     toast.success(`Dias de plantao atualizados para ${memberToEditWorkDaysData.name}`);
@@ -473,6 +509,7 @@ export default function Dashboard() {
   const handleCloseWorkDaysDialog = () => {
     setShowWorkDaysDialog(false);
     setMemberToEditWorkDays(null);
+    setCanDoFridaySelection(true);
   };
 
   const handleOpenReorderDialog = () => {
@@ -642,7 +679,7 @@ export default function Dashboard() {
 
     // Converter feriados para array de strings (YYYY-MM-DD)
     // Passar a lista de membros e a funcao de deteccao de ferias
-    return getScheduledPerson(date, teamMembers, scales, isPersonOnTimeOff, holidayDates, shiftSwaps);
+    return scheduleByDate.get(dateKey(date)) ?? null;
   };
 
   const getHolidayForDay = (day: number | null) => {
@@ -1059,6 +1096,22 @@ export default function Dashboard() {
                       </label>
                     ))}
                   </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>Disponibilidade na sexta</Label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={canDoFridaySelection}
+                      onCheckedChange={(checked) =>
+                        setCanDoFridaySelection(checked === true)
+                      }
+                      disabled={!admin}
+                    />
+                    Pode fazer sexta
+                  </label>
+                  <p className="text-xs text-muted-foreground">
+                    Se desmarcado, entra na troca automática quando cair na sexta.
+                  </p>
                 </div>
                 <div className="flex gap-2">
                   <Button

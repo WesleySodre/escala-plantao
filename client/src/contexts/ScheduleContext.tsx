@@ -16,6 +16,16 @@ export interface TeamMember {
   joinDate: string; // YYYY-MM-DD
   removeDate?: string; // YYYY-MM-DD (opcional, para exclusão com data de início)
   workDays: number[]; // 1-5 para seg-sex (por padrão todos os dias)
+  canDoFriday: boolean;
+}
+
+export type AutoFridayCompensationMode = "previous" | "next" | "nearest";
+
+export interface AutoFridaySwapConfig {
+  enabled: boolean;
+  queueMemberIds: string[];
+  queuePointer: number;
+  compensationMode: AutoFridayCompensationMode;
 }
 
 export interface ShiftSwap {
@@ -35,6 +45,7 @@ export interface Scale {
   createdAt: string;
   anchorDate?: string;
   anchorMemberId?: string;
+  autoFridaySwap?: AutoFridaySwapConfig;
 }
 
 export interface Holiday {
@@ -97,6 +108,13 @@ const DEFAULT_ROTATION_NAMES = [
   "Luis",
 ];
 
+const DEFAULT_AUTO_FRIDAY_SWAP: AutoFridaySwapConfig = {
+  enabled: false,
+  queueMemberIds: [],
+  queuePointer: 0,
+  compensationMode: "next",
+};
+
 interface ScheduleContextType {
   // Team Management
   teamMembers: TeamMember[];
@@ -104,6 +122,7 @@ interface ScheduleContextType {
   removeTeamMember: (id: string, removeDate?: string) => void;
   reorderTeamMembers: (newOrder: string[]) => void; // Reordenar por IDs
   updateTeamMemberWorkDays: (id: string, workDays: number[]) => void;
+  updateTeamMemberCanDoFriday: (id: string, canDoFriday: boolean) => void;
 
   // Time Off Management
   timeOffs: TimeOff[];
@@ -200,6 +219,7 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         createdAt: "2026-02-19",
         anchorDate: "2026-02-19",
         anchorMemberId: katiaId,
+        autoFridaySwap: { ...DEFAULT_AUTO_FRIDAY_SWAP },
       },
       {
         id: "scale-2",
@@ -210,8 +230,44 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         createdAt: "2026-02-20",
         anchorDate: "2026-02-20",
         anchorMemberId: claudiaId,
+        autoFridaySwap: { ...DEFAULT_AUTO_FRIDAY_SWAP },
       },
     ];
+  };
+
+  const normalizeAutoFridaySwapConfig = (
+    config: AutoFridaySwapConfig | undefined,
+    memberIds: string[]
+  ): AutoFridaySwapConfig => {
+    const base = { ...DEFAULT_AUTO_FRIDAY_SWAP, ...(config ?? {}) };
+    const queue = Array.isArray(base.queueMemberIds)
+      ? base.queueMemberIds.filter(
+          (id, index, list) => memberIds.includes(id) && list.indexOf(id) === index
+        )
+      : [];
+    const pointer = Number.isFinite(base.queuePointer) ? base.queuePointer : 0;
+    const normalizedPointer =
+      queue.length > 0 ? ((pointer % queue.length) + queue.length) % queue.length : 0;
+    const compensationMode =
+      base.compensationMode === "previous" ||
+      base.compensationMode === "next" ||
+      base.compensationMode === "nearest"
+        ? base.compensationMode
+        : "next";
+    return {
+      enabled: Boolean(base.enabled),
+      queueMemberIds: queue,
+      queuePointer: normalizedPointer,
+      compensationMode,
+    };
+  };
+
+  const normalizeScales = (nextScales: Scale[], members: TeamMember[]) => {
+    const memberIds = members.map((member) => member.id);
+    return nextScales.map((scale) => ({
+      ...scale,
+      autoFridaySwap: normalizeAutoFridaySwapConfig(scale.autoFridaySwap, memberIds),
+    }));
   };
 
   const syncScaleMembers = (members: TeamMember[], existingScales: Scale[]) => {
@@ -219,25 +275,93 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return existingScales.map((scale) => {
       const filtered = scale.rotationMemberIds.filter((id) => memberIds.includes(id));
       const missing = memberIds.filter((id) => !filtered.includes(id));
+      const autoFridaySwap = normalizeAutoFridaySwapConfig(scale.autoFridaySwap, memberIds);
       return {
         ...scale,
         rotationMemberIds: [...filtered, ...missing],
+        autoFridaySwap,
       };
     });
   };
 
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([
-    { id: "1", name: "Benedito", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
-    { id: "2", name: "Mauro", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
-    { id: "3", name: "Cláudia", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
-    { id: "4", name: "Rosana", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
-    { id: "5", name: "José Claudio", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
-    { id: "6", name: "Katia", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
-    { id: "7", name: "Daniel", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
-    { id: "8", name: "Leonardo", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
-    { id: "9", name: "Wesley", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
-    { id: "10", name: "Lúcia", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
-    { id: "11", name: "Luis", joinDate: "2020-01-01", workDays: [1, 2, 3, 4, 5] },
+    {
+      id: "1",
+      name: "Benedito",
+      joinDate: "2020-01-01",
+      workDays: [1, 2, 3, 4, 5],
+      canDoFriday: true,
+    },
+    {
+      id: "2",
+      name: "Mauro",
+      joinDate: "2020-01-01",
+      workDays: [1, 2, 3, 4, 5],
+      canDoFriday: true,
+    },
+    {
+      id: "3",
+      name: "Cláudia",
+      joinDate: "2020-01-01",
+      workDays: [1, 2, 3, 4, 5],
+      canDoFriday: true,
+    },
+    {
+      id: "4",
+      name: "Rosana",
+      joinDate: "2020-01-01",
+      workDays: [1, 2, 3, 4, 5],
+      canDoFriday: true,
+    },
+    {
+      id: "5",
+      name: "José Claudio",
+      joinDate: "2020-01-01",
+      workDays: [1, 2, 3, 4, 5],
+      canDoFriday: true,
+    },
+    {
+      id: "6",
+      name: "Katia",
+      joinDate: "2020-01-01",
+      workDays: [1, 2, 3, 4, 5],
+      canDoFriday: true,
+    },
+    {
+      id: "7",
+      name: "Daniel",
+      joinDate: "2020-01-01",
+      workDays: [1, 2, 3, 4, 5],
+      canDoFriday: true,
+    },
+    {
+      id: "8",
+      name: "Leonardo",
+      joinDate: "2020-01-01",
+      workDays: [1, 2, 3, 4, 5],
+      canDoFriday: true,
+    },
+    {
+      id: "9",
+      name: "Wesley",
+      joinDate: "2020-01-01",
+      workDays: [1, 2, 3, 4, 5],
+      canDoFriday: true,
+    },
+    {
+      id: "10",
+      name: "Lúcia",
+      joinDate: "2020-01-01",
+      workDays: [1, 2, 3, 4, 5],
+      canDoFriday: true,
+    },
+    {
+      id: "11",
+      name: "Luis",
+      joinDate: "2020-01-01",
+      workDays: [1, 2, 3, 4, 5],
+      canDoFriday: true,
+    },
   ]);
 
   const [timeOffs, setTimeOffs] = useState<TimeOff[]>([]);
@@ -250,6 +374,7 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     members.map((member) => ({
       ...member,
       workDays: Array.isArray(member.workDays) ? member.workDays : [1, 2, 3, 4, 5],
+      canDoFriday: typeof member.canDoFriday === "boolean" ? member.canDoFriday : true,
     }));
 
   const applyStateFromPayload = (payload: {
@@ -276,7 +401,7 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
 
     if (Array.isArray(payload.scales)) {
-      setScales(payload.scales);
+      setScales(normalizeScales(payload.scales, loadedTeamMembers));
     } else if (payload.scales === undefined) {
       setScales(buildDefaultScales(loadedTeamMembers));
     }
@@ -451,6 +576,7 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       name,
       joinDate: new Date().toISOString().split("T")[0],
       workDays: [1, 2, 3, 4, 5], // Por padrão, todos os dias
+      canDoFriday: true,
     };
     setTeamMembers([...teamMembers, newMember]);
   };
@@ -473,6 +599,14 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setTeamMembers(
       teamMembers.map((member) =>
         member.id === id ? { ...member, workDays } : member
+      )
+    );
+  };
+
+  const updateTeamMemberCanDoFriday = (id: string, canDoFriday: boolean) => {
+    setTeamMembers(
+      teamMembers.map((member) =>
+        member.id === id ? { ...member, canDoFriday } : member
       )
     );
   };
@@ -599,6 +733,7 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         removeTeamMember,
         reorderTeamMembers,
         updateTeamMemberWorkDays,
+        updateTeamMemberCanDoFriday,
         timeOffs,
         addTimeOff,
         removeTimeOff,
