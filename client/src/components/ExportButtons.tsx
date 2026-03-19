@@ -44,7 +44,16 @@ export default function ExportButtons({
   const handleExportPdf = async () => {
     setPdfLoading(true);
     try {
-      await exportCalendarToPdf(calendarElementId);
+      await exportCalendarToPdf({
+        year,
+        month,
+        teamMembers,
+        scales,
+        timeOffs,
+        holidays,
+        shiftSwaps,
+        isPersonOnTimeOff,
+      });
     } catch (err) {
       console.error("Erro ao exportar PDF:", err);
       toast.error("Não foi possível exportar o PDF.");

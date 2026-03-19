@@ -1,9 +1,10 @@
 import { jsxLocPlugin } from "@builder.io/vite-plugin-jsx-loc";
 import tailwindcss from "@tailwindcss/vite";
+import { SignJWT } from "jose";
 import react from "@vitejs/plugin-react";
 import fs from "node:fs";
 import path from "node:path";
-import { defineConfig, type Plugin, type ViteDevServer } from "vite";
+import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from "vite";
 import { vitePluginManusRuntime } from "vite-plugin-manus-runtime";
 
 // =============================================================================
@@ -150,39 +151,125 @@ function vitePluginManusDebugCollector(): Plugin {
   };
 }
 
-const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector()];
+function vitePluginLocalAdminLogin(adminPassword: string, adminJwtSecret: string): Plugin {
+  return {
+    name: "local-admin-login",
+    apply: "serve",
+    configureServer(server) {
+      server.middlewares.use("/.netlify/functions/admin-login", (req, res, next) => {
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "text/plain");
+          res.end("Method Not Allowed");
+          return;
+        }
 
-export default defineConfig({
-  plugins,
-  resolve: {
-    alias: {
-      "@": path.resolve(import.meta.dirname, "client", "src"),
-      "@shared": path.resolve(import.meta.dirname, "shared"),
-      "@assets": path.resolve(import.meta.dirname, "attached_assets"),
+        let body = "";
+        req.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+
+        req.on("end", () => {
+          let data: { password?: string } = {};
+          try {
+            data = JSON.parse(body || "{}");
+          } catch {
+            res.statusCode = 400;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ success: false, error: "Invalid JSON" }));
+            return;
+          }
+
+          if (!adminPassword) {
+            res.statusCode = 500;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ success: false, error: "ADMIN_PASSWORD not set" }));
+            return;
+          }
+
+          if (!adminJwtSecret) {
+            res.statusCode = 500;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ success: false, error: "ADMIN_JWT_SECRET not set" }));
+            return;
+          }
+
+          const password = String(data.password || "");
+          if (password !== adminPassword) {
+            res.statusCode = 401;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ success: false }));
+            return;
+          }
+
+          void (async () => {
+            const secretKey = new TextEncoder().encode(adminJwtSecret);
+            const token = await new SignJWT({ admin: true })
+              .setProtectedHeader({ alg: "HS256" })
+              .setIssuedAt()
+              .setExpirationTime("30m")
+              .sign(secretKey);
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ success: true, token }));
+          })().catch((error) => {
+            res.statusCode = 500;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ success: false, error: String(error) }));
+          });
+        });
+      });
     },
-  },
-  envDir: path.resolve(import.meta.dirname),
-  root: path.resolve(import.meta.dirname, "client"),
-  build: {
-    outDir: path.resolve(import.meta.dirname, "dist/public"),
-    emptyOutDir: true,
-  },
-  server: {
-    port: 3000,
-    strictPort: false, // Will find next available port if 3000 is busy
-    host: true,
-    allowedHosts: [
-      ".manuspre.computer",
-      ".manus.computer",
-      ".manus-asia.computer",
-      ".manuscomputer.ai",
-      ".manusvm.computer",
-      "localhost",
-      "127.0.0.1",
-    ],
-    fs: {
-      strict: true,
-      deny: ["**/.*"],
+  };
+}
+
+export default defineConfig(({ mode }) => {
+  const envDir = path.resolve(import.meta.dirname);
+  const env = loadEnv(mode, envDir, "");
+  const adminPassword = process.env.ADMIN_PASSWORD || env.ADMIN_PASSWORD || "";
+  const adminJwtSecret = process.env.ADMIN_JWT_SECRET || env.ADMIN_JWT_SECRET || "";
+
+  const plugins = [
+    react(),
+    tailwindcss(),
+    jsxLocPlugin(),
+    vitePluginManusRuntime(),
+    vitePluginManusDebugCollector(),
+    vitePluginLocalAdminLogin(adminPassword, adminJwtSecret),
+  ];
+
+  return {
+    plugins,
+    resolve: {
+      alias: {
+        "@": path.resolve(import.meta.dirname, "client", "src"),
+        "@shared": path.resolve(import.meta.dirname, "shared"),
+        "@assets": path.resolve(import.meta.dirname, "attached_assets"),
+      },
     },
-  },
+    envDir,
+    root: path.resolve(import.meta.dirname, "client"),
+    build: {
+      outDir: path.resolve(import.meta.dirname, "dist/public"),
+      emptyOutDir: true,
+    },
+    server: {
+      port: 3000,
+      strictPort: false, // Will find next available port if 3000 is busy
+      host: true,
+      allowedHosts: [
+        ".manuspre.computer",
+        ".manus.computer",
+        ".manus-asia.computer",
+        ".manuscomputer.ai",
+        ".manusvm.computer",
+        "localhost",
+        "127.0.0.1",
+      ],
+      fs: {
+        strict: true,
+        deny: ["**/.*"],
+      },
+    },
+  };
 });

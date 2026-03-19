@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { Home, Users, AlertCircle, Layers } from "lucide-react";
+import { Home, AlertCircle, Layers } from "lucide-react";
 import React from "react";
 import { Button } from "@/components/ui/button";
 import { adminLogin, adminLogout, isAdmin, setAdmin } from "@/auth/adminAuth";
@@ -13,7 +13,6 @@ export default function Layout({ children }: LayoutProps) {
   const admin = isAdmin();
   const navItems = [
     { href: "/", label: "Hoje", icon: Home },
-    { href: "/equipe", label: "Equipe", icon: Users },
     { href: "/feriados", label: "Feriados", icon: AlertCircle },
     { href: "/escalas", label: "Escalas", icon: Layers },
   ];

@@ -2,12 +2,20 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { Card, CardContent } from "@/components/ui/card";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Separator } from "@/components/ui/separator";
 import {
   Select,
   SelectContent,
@@ -66,7 +74,6 @@ export default function Scales() {
     addScale,
     updateScale,
     removeScale,
-    toggleScaleActive,
     restoreDefaultScales,
   } = useSchedule();
 
@@ -75,16 +82,23 @@ export default function Scales() {
   const [pendingDelete, setPendingDelete] = useState<Scale | null>(null);
   const [editingScaleId, setEditingScaleId] = useState<string | null>(null);
   const [scaleName, setScaleName] = useState("");
+  const [scaleStartDate, setScaleStartDate] = useState("");
   const [scaleWeekdays, setScaleWeekdays] = useState<number[]>([]);
   const [scaleRotationOrder, setScaleRotationOrder] = useState<string[]>([]);
   const [scaleActive, setScaleActive] = useState(true);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [anchorDate, setAnchorDate] = useState("");
+  const [anchorMemberId, setAnchorMemberId] = useState("");
+  const ANCHOR_NONE = "__none__";
   const [autoFridayEnabled, setAutoFridayEnabled] = useState(false);
   const [autoFridayQueue, setAutoFridayQueue] = useState<string[]>([]);
   const [autoFridayCompensationMode, setAutoFridayCompensationMode] = useState<
     "previous" | "next" | "nearest"
   >("next");
   const [queueDragIndex, setQueueDragIndex] = useState<number | null>(null);
+  const [showDeactivateDialog, setShowDeactivateDialog] = useState(false);
+  const [pendingDeactivateScale, setPendingDeactivateScale] = useState<Scale | null>(null);
+  const [deactivateDate, setDeactivateDate] = useState("");
 
   const memberById = useMemo(() => {
     return new Map(teamMembers.map((member) => [member.id, member]));
@@ -183,11 +197,18 @@ export default function Scales() {
     }
   };
 
-  const getConflictingWeekdays = (weekdays: number[], ignoreId?: string | null) => {
+  const getConflictingWeekdays = (
+    weekdays: number[],
+    effectiveFrom: string | undefined,
+    ignoreId?: string | null
+  ) => {
     const conflicts = new Set<number>();
+    const normalizedEffectiveFrom = effectiveFrom ?? "";
     scales.forEach((scale) => {
       if (!scale.isActive) return;
       if (ignoreId && scale.id === ignoreId) return;
+      const otherEffectiveFrom = scale.effectiveFrom ?? "";
+      if (otherEffectiveFrom !== normalizedEffectiveFrom) return;
       scale.weekdays.forEach((day) => {
         if (weekdays.includes(day)) {
           conflicts.add(day);
@@ -204,9 +225,13 @@ export default function Scales() {
     }
     setEditingScaleId(null);
     setScaleName("");
+    const today = getTodayString();
+    setScaleStartDate(today);
     setScaleWeekdays([]);
     setScaleRotationOrder(activeMembersToday.map((member) => member.id));
     setScaleActive(true);
+    setAnchorDate(today);
+    setAnchorMemberId(activeMembersToday[0]?.id ?? "");
     setAutoFridayEnabled(false);
     setAutoFridayQueue(activeMembersToday.map((member) => member.id));
     setAutoFridayCompensationMode("next");
@@ -219,11 +244,16 @@ export default function Scales() {
       autoFriday.queueMemberIds.length > 0
         ? autoFriday.queueMemberIds
         : activeMembersToday.map((member) => member.id);
+    const anchorDateValue = scale.anchorDate ?? "";
+    const anchorMemberValue = scale.anchorMemberId ?? "";
     setEditingScaleId(scale.id);
     setScaleName(scale.name);
+    setScaleStartDate(scale.effectiveFrom ?? "");
     setScaleWeekdays([...scale.weekdays]);
     setScaleRotationOrder(normalizeRotationOrder(scale.rotationMemberIds));
     setScaleActive(scale.isActive);
+    setAnchorDate(anchorDateValue);
+    setAnchorMemberId(anchorMemberValue);
     setAutoFridayEnabled(autoFriday.enabled);
     setAutoFridayQueue(normalizeQueueOrder(queueSeed));
     setAutoFridayCompensationMode(
@@ -249,6 +279,27 @@ export default function Scales() {
     const normalizedWeekdays = Array.from(new Set(scaleWeekdays)).sort((a, b) => a - b);
     const normalizedRotation = normalizeRotationOrder(scaleRotationOrder);
     const normalizedQueue = normalizeQueueOrder(autoFridayQueue);
+    const hasAnchorDate = Boolean(anchorDate);
+    const hasAnchorMember = Boolean(anchorMemberId);
+    if (hasAnchorDate !== hasAnchorMember) {
+      toast.error("Preencha data e membro da âncora ou limpe ambos os campos.");
+      return;
+    }
+    if (hasAnchorDate && hasAnchorMember) {
+      const existsInRotation = normalizedRotation.includes(anchorMemberId);
+      const existsInTeam = teamMembers.some((member) => member.id === anchorMemberId);
+      if (!existsInRotation && !existsInTeam) {
+        toast.error("Selecione um membro válido para iniciar a rotação.");
+        return;
+      }
+    }
+    const normalizedAnchorDate = hasAnchorDate ? anchorDate : undefined;
+    const normalizedAnchorMemberId = hasAnchorMember ? anchorMemberId : undefined;
+    const normalizedEffectiveFrom = scaleStartDate ? scaleStartDate : undefined;
+    if (!editingScaleId && !normalizedEffectiveFrom) {
+      toast.error("Selecione a data de início da nova escala.");
+      return;
+    }
     const existingPointer = editingScaleId
       ? scales.find((scale) => scale.id === editingScaleId)?.autoFridaySwap?.queuePointer ?? 0
       : 0;
@@ -268,7 +319,11 @@ export default function Scales() {
       return;
     }
     if (scaleActive) {
-      const conflicts = getConflictingWeekdays(normalizedWeekdays, editingScaleId);
+      const conflicts = getConflictingWeekdays(
+        normalizedWeekdays,
+        normalizedEffectiveFrom,
+        editingScaleId
+      );
       if (conflicts.length > 0) {
         toast.error(`Conflito de dias: ${formatWeekdays(conflicts)}`);
         return;
@@ -281,6 +336,9 @@ export default function Scales() {
         weekdays: normalizedWeekdays,
         rotationMemberIds: normalizedRotation,
         isActive: scaleActive,
+        effectiveFrom: normalizedEffectiveFrom,
+        anchorDate: normalizedAnchorDate,
+        anchorMemberId: normalizedAnchorMemberId,
         autoFridaySwap,
       };
       const nextScales = scales.map((scale) =>
@@ -298,8 +356,9 @@ export default function Scales() {
         rotationMemberIds: normalizedRotation,
         isActive: scaleActive,
         createdAt: today,
-        anchorDate: today,
-        anchorMemberId: normalizedRotation[0],
+        effectiveFrom: normalizedEffectiveFrom,
+        anchorDate: normalizedAnchorDate,
+        anchorMemberId: normalizedAnchorMemberId,
         autoFridaySwap: {
           ...autoFridaySwap,
           queuePointer: 0,
@@ -316,19 +375,53 @@ export default function Scales() {
   };
 
   const handleToggleActive = (scale: Scale) => {
-    if (!scale.isActive) {
-      const conflicts = getConflictingWeekdays(scale.weekdays, scale.id);
-      if (conflicts.length > 0) {
-        toast.error(`Conflito de dias: ${formatWeekdays(conflicts)}`);
-        return;
-      }
+    if (scale.isActive) {
+      setPendingDeactivateScale(scale);
+      setDeactivateDate(getTodayString());
+      setShowDeactivateDialog(true);
+      return;
     }
-    const nextScales = scales.map((item) =>
-      item.id === scale.id ? { ...item, isActive: !scale.isActive } : item
+
+    const conflicts = getConflictingWeekdays(
+      scale.weekdays,
+      scale.effectiveFrom,
+      scale.id
     );
-    toggleScaleActive(scale.id, !scale.isActive);
+    if (conflicts.length > 0) {
+      toast.error(`Conflito de dias: ${formatWeekdays(conflicts)}`);
+      return;
+    }
+
+    const updates: Partial<Scale> = {
+      isActive: true,
+      inactiveFrom: undefined,
+    };
+    const nextScales = scales.map((item) =>
+      item.id === scale.id ? { ...item, ...updates } : item
+    );
+    updateScale(scale.id, updates);
     warnIfMissingWeekdays(nextScales);
-    toast.success(scale.isActive ? "Escala desativada" : "Escala ativada");
+    toast.success("Escala reativada");
+  };
+
+  const handleConfirmDeactivate = () => {
+    if (!pendingDeactivateScale) return;
+    if (!deactivateDate) {
+      toast.error("Selecione a data de desativação.");
+      return;
+    }
+    const updates: Partial<Scale> = {
+      isActive: false,
+      inactiveFrom: deactivateDate,
+    };
+    const nextScales = scales.map((item) =>
+      item.id === pendingDeactivateScale.id ? { ...item, ...updates } : item
+    );
+    updateScale(pendingDeactivateScale.id, updates);
+    warnIfMissingWeekdays(nextScales);
+    toast.success("Escala desativada");
+    setShowDeactivateDialog(false);
+    setPendingDeactivateScale(null);
   };
 
   const handleDuplicateScale = (scale: Scale) => {
@@ -339,6 +432,7 @@ export default function Scales() {
       name: `${scale.name} (copia)`,
       isActive: false,
       createdAt: today,
+      effectiveFrom: today,
       anchorDate: today,
       anchorMemberId: scale.rotationMemberIds[0],
     };
@@ -517,7 +611,7 @@ export default function Scales() {
                             disabled={!admin}
                           >
                             <Power size={14} />
-                            {scale.isActive ? "Desativar" : "Ativar"}
+                            {scale.isActive ? "Desativar" : "Reativar"}
                           </Button>
                           <Button
                             variant="ghost"
@@ -568,172 +662,278 @@ export default function Scales() {
             }
           }}
         >
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>
-                {editingScaleId ? "Editar escala" : "Nova escala"}
-              </DialogTitle>
-              <DialogDescription>
-                Defina os dias cobertos e a ordem de rotação.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="scale-name">Nome</Label>
-                <Input
-                  id="scale-name"
-                  value={scaleName}
-                  onChange={(event) => setScaleName(event.target.value)}
-                  placeholder="Ex: Seg-Qui"
-                />
-              </div>
-              <div>
-                <Label>Dias da semana</Label>
-                <div className="grid grid-cols-5 gap-3 mt-2">
-                  {WEEKDAY_OPTIONS.map((day) => (
-                    <label key={day.value} className="flex items-center gap-2 text-sm">
-                      <Checkbox
-                        checked={scaleWeekdays.includes(day.value)}
-                        onCheckedChange={(checked) => {
-                          setScaleWeekdays((prev) => {
-                            if (checked === true) {
-                              const next = Array.from(new Set([...prev, day.value]));
-                              return next.sort((a, b) => a - b);
-                            }
-                            return prev.filter((value) => value !== day.value);
-                          });
-                        }}
+        <DialogContent className="sm:!max-w-4xl !max-w-4xl max-h-[85vh] overflow-y-auto p-5">
+          <DialogHeader>
+            <DialogTitle>
+              {editingScaleId ? "Editar escala" : "Nova escala"}
+            </DialogTitle>
+            <DialogDescription>
+              Defina os dias cobertos e a ordem de rotação.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <Accordion type="multiple" defaultValue={["general", "anchor"]} className="w-full">
+              <AccordionItem value="general">
+                <AccordionTrigger className="font-semibold">
+                  Configurações Gerais
+                </AccordionTrigger>
+                <AccordionContent>
+                  <div className="space-y-4">
+                    <div>
+                      <Label htmlFor="scale-name">Nome</Label>
+                      <Input
+                        id="scale-name"
+                        value={scaleName}
+                        onChange={(event) => setScaleName(event.target.value)}
+                        placeholder="Ex: Seg-Qui"
                       />
-                      {day.label}
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <Label>Ordem de rotação</Label>
-                <div className="space-y-2 max-h-64 overflow-y-auto mt-2">
-                  {scaleRotationOrder.map((memberId, index) => {
-                    const member = memberById.get(memberId);
-                    return (
-                      <div
-                        key={memberId}
-                        draggable
-                        onDragStart={handleDragStart(index)}
-                        onDragOver={handleDragOver}
-                        onDrop={handleDrop(index)}
-                        onDragEnd={handleDragEnd}
-                        className="flex items-center justify-between p-3 bg-secondary rounded-lg border border-border cursor-move"
-                      >
-                        <div className="flex items-center gap-2">
-                          <GripVertical size={16} className="text-muted-foreground" />
-                          <span className="text-sm font-medium text-foreground">
-                            {member?.name ?? "Membro"}
-                          </span>
-                        </div>
+                    </div>
+                    <div>
+                      <Label htmlFor="scale-start-date">A partir de</Label>
+                      <Input
+                        id="scale-start-date"
+                        type="date"
+                        value={scaleStartDate}
+                        onChange={(event) => setScaleStartDate(event.target.value)}
+                        disabled={!admin}
+                      />
+                      <p className="text-xs text-muted-foreground mt-2">
+                        Datas anteriores continuam com a escala anterior.
+                      </p>
+                    </div>
+                    <div>
+                      <Label>Dias da semana</Label>
+                      <div className="grid grid-cols-5 gap-3 mt-2">
+                        {WEEKDAY_OPTIONS.map((day) => (
+                          <label key={day.value} className="flex items-center gap-2 text-sm">
+                            <Checkbox
+                              checked={scaleWeekdays.includes(day.value)}
+                              onCheckedChange={(checked) => {
+                                setScaleWeekdays((prev) => {
+                                  if (checked === true) {
+                                    const next = Array.from(new Set([...prev, day.value]));
+                                    return next.sort((a, b) => a - b);
+                                  }
+                                  return prev.filter((value) => value !== day.value);
+                                });
+                              }}
+                            />
+                            {day.label}
+                          </label>
+                        ))}
                       </div>
-                    );
-                  })}
-                </div>
-              </div>
-              <div className="space-y-3 border-t border-border/60 pt-4">
-                <div className="flex items-center gap-2">
-                  <Checkbox
-                    checked={autoFridayEnabled}
-                    onCheckedChange={(checked) => setAutoFridayEnabled(checked === true)}
-                    disabled={!admin}
-                  />
-                  <span className="text-sm font-medium">
-                    Ativar troca automática na sexta
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Quando o titular não pode sexta, o sistema troca com a lista paralela
-                  e compensa em outro dia.
-                </p>
-                <div className="space-y-2">
-                  <Label>Lista paralela (ordem dos substitutos)</Label>
-                  <div className="space-y-2 max-h-48 overflow-y-auto">
-                    {autoFridayQueue.length === 0 ? (
-                      <div className="text-xs text-muted-foreground">
-                        Nenhum membro na lista paralela.
-                      </div>
-                    ) : (
-                      autoFridayQueue.map((memberId, index) => {
-                        const member = memberById.get(memberId);
-                        return (
-                          <div
-                            key={memberId}
-                            draggable={admin}
-                            onDragStart={handleQueueDragStart(index)}
-                            onDragOver={handleDragOver}
-                            onDrop={handleQueueDrop(index)}
-                            onDragEnd={handleQueueDragEnd}
-                            className={`flex items-center justify-between p-3 bg-secondary rounded-lg border border-border cursor-move ${
-                              queueDragIndex === index ? "opacity-60" : ""
-                            }`}
-                          >
-                            <div className="flex items-center gap-2">
-                              <GripVertical size={16} className="text-muted-foreground" />
-                              <span className="text-sm font-medium text-foreground">
-                                {member?.name ?? "Membro"}
-                              </span>
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        checked={scaleActive}
+                        onCheckedChange={(checked) => setScaleActive(checked === true)}
+                        disabled={!admin}
+                      />
+                      <span className="text-sm">Escala ativa</span>
+                    </div>
                   </div>
-                </div>
-                <div className="space-y-2">
-                  <Label>Modo de compensação</Label>
-                  <Select
-                    value={autoFridayCompensationMode}
-                    onValueChange={(value) =>
-                      setAutoFridayCompensationMode(
-                        value as "previous" | "next" | "nearest"
-                      )
-                    }
-                    disabled={!admin}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Selecione o modo" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {COMPENSATION_OPTIONS.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">
-                    Anterior = último plantão do substituto, Posterior = próximo, Mais próximo
-                    escolhe o mais perto.
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  checked={scaleActive}
-                  onCheckedChange={(checked) => setScaleActive(checked === true)}
-                  disabled={!admin}
-                />
-                <span className="text-sm">Escala ativa</span>
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => setShowScaleDialog(false)}
-                  className="flex-1"
-                >
-                  Cancelar
-                </Button>
-                <Button onClick={handleSaveScale} className="flex-1" disabled={!admin}>
-                  Salvar
-                </Button>
-              </div>
-            </div>
-          </DialogContent>
+                </AccordionContent>
+              </AccordionItem>
+              <AccordionItem value="anchor">
+                <AccordionTrigger className="font-semibold">
+                  Âncora de Início
+                </AccordionTrigger>
+                <AccordionContent>
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="anchor-date">Começar em</Label>
+                      <Input
+                        id="anchor-date"
+                        type="date"
+                        value={anchorDate}
+                        onChange={(event) => setAnchorDate(event.target.value)}
+                        disabled={!admin}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="anchor-member">Começar com</Label>
+                      <Select
+                        value={anchorMemberId || ANCHOR_NONE}
+                        onValueChange={(value) => {
+                          const normalized = value === ANCHOR_NONE ? "" : value;
+                          setAnchorMemberId(normalized);
+                          if (!normalized) {
+                            setAnchorDate("");
+                          }
+                        }}
+                        disabled={!admin}
+                      >
+                        <SelectTrigger id="anchor-member">
+                          <SelectValue placeholder="Selecione o membro" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={ANCHOR_NONE}>Sem âncora</SelectItem>
+                          {teamMembers.map((member) => (
+                            <SelectItem key={member.id} value={member.id}>
+                              {member.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      A partir desta data, a rotação será recalculada para as datas posteriores.
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleSaveScale}
+                      disabled={!admin}
+                    >
+                      Recalcular a partir desta data
+                    </Button>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
+            <Accordion type="multiple" defaultValue={["rotation", "friday"]} className="w-full">
+              <AccordionItem value="rotation">
+                <AccordionTrigger className="font-semibold">Rotação</AccordionTrigger>
+                <AccordionContent>
+                  <div className="space-y-3">
+                    <Label>Ordem de rotação</Label>
+                    <Card className="!py-3 !gap-3">
+                      <CardContent className="!px-3 pb-3">
+                        <div className="space-y-1.5 max-h-56 overflow-auto">
+                          {scaleRotationOrder.map((memberId, index) => {
+                            const member = memberById.get(memberId);
+                            return (
+                              <div
+                                key={memberId}
+                                draggable
+                                onDragStart={handleDragStart(index)}
+                                onDragOver={handleDragOver}
+                                onDrop={handleDrop(index)}
+                                onDragEnd={handleDragEnd}
+                                className="flex items-center justify-between rounded-lg border border-border bg-secondary px-3 py-2 text-sm"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <GripVertical size={14} className="text-muted-foreground" />
+                                  <span className="font-medium text-foreground">
+                                    {member?.name ?? "Membro"}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+              <AccordionItem value="friday">
+                <AccordionTrigger className="font-semibold">
+                  Sexta-feira (Troca automática)
+                </AccordionTrigger>
+                <AccordionContent>
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        checked={autoFridayEnabled}
+                        onCheckedChange={(checked) => setAutoFridayEnabled(checked === true)}
+                        disabled={!admin}
+                      />
+                      <span className="text-sm font-medium">
+                        Ativar troca automática na sexta
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Quando o titular não pode sexta, o sistema troca com a lista paralela
+                      e compensa em outro dia.
+                    </p>
+                    <div className="space-y-2">
+                      <Label>Lista paralela (ordem dos substitutos)</Label>
+                      <Card className="!py-3 !gap-3">
+                        <CardContent className="!px-3 pb-3">
+                          <div className="max-h-48 overflow-auto space-y-1.5">
+                            {autoFridayQueue.length === 0 ? (
+                              <div className="text-xs text-muted-foreground">
+                                Nenhum membro na lista paralela.
+                              </div>
+                            ) : (
+                              autoFridayQueue.map((memberId, index) => {
+                                const member = memberById.get(memberId);
+                                return (
+                                  <div
+                                    key={memberId}
+                                    draggable={admin}
+                                    onDragStart={handleQueueDragStart(index)}
+                                    onDragOver={handleDragOver}
+                                    onDrop={handleQueueDrop(index)}
+                                    onDragEnd={handleQueueDragEnd}
+                                    className={`flex items-center justify-between rounded-lg border border-border bg-secondary px-3 py-2 text-sm ${
+                                      queueDragIndex === index ? "opacity-60" : ""
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <GripVertical
+                                        size={14}
+                                        className="text-muted-foreground"
+                                      />
+                                      <span className="font-medium text-foreground">
+                                        {member?.name ?? "Membro"}
+                                      </span>
+                                    </div>
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Modo de compensação</Label>
+                      <Select
+                        value={autoFridayCompensationMode}
+                        onValueChange={(value) =>
+                          setAutoFridayCompensationMode(
+                            value as "previous" | "next" | "nearest"
+                          )
+                        }
+                        disabled={!admin}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecione o modo" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {COMPENSATION_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Anterior = último plantão do substituto, Posterior = próximo, Mais próximo
+                        escolhe o mais perto.
+                      </p>
+                    </div>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
+          </div>
+          <Separator />
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowScaleDialog(false)}
+              className="flex-1"
+            >
+              Cancelar
+            </Button>
+            <Button onClick={handleSaveScale} className="flex-1" disabled={!admin}>
+              Salvar
+            </Button>
+          </div>
+        </DialogContent>
         </Dialog>
 
         <AlertDialog
@@ -757,6 +957,41 @@ export default function Scales() {
               <AlertDialogCancel>Cancelar</AlertDialogCancel>
               <AlertDialogAction onClick={handleConfirmDelete} disabled={!admin}>
                 Excluir
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        <AlertDialog
+          open={showDeactivateDialog}
+          onOpenChange={(open) => {
+            setShowDeactivateDialog(open);
+            if (!open) {
+              setPendingDeactivateScale(null);
+            }
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Desativar escala</AlertDialogTitle>
+              <AlertDialogDescription>
+                A escala valerá até o dia anterior à data escolhida.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <div className="space-y-2">
+              <Label htmlFor="deactivate-date">Desativar a partir de</Label>
+              <Input
+                id="deactivate-date"
+                type="date"
+                value={deactivateDate}
+                onChange={(event) => setDeactivateDate(event.target.value)}
+                disabled={!admin}
+              />
+            </div>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancelar</AlertDialogCancel>
+              <AlertDialogAction onClick={handleConfirmDeactivate} disabled={!admin}>
+                Confirmar
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

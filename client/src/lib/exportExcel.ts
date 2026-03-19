@@ -19,6 +19,7 @@ type ExportExcelOptions = {
 };
 
 const weekdayFormatter = new Intl.DateTimeFormat("pt-BR", { weekday: "short" });
+const monthFormatter = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" });
 
 function formatDateBR(date: Date): string {
   return new Intl.DateTimeFormat("pt-BR", {
@@ -97,6 +98,7 @@ export async function exportCalendarToExcel({
     let plantonista = "";
     let substituto = "";
     let motivo = "";
+    let escalaDefinitiva = "";
 
     if (!workingDay) {
       motivo = holidayDay ? `Feriado${holiday?.name ? ` - ${holiday.name}` : ""}` : "Sem expediente";
@@ -106,6 +108,7 @@ export async function exportCalendarToExcel({
       const original = scheduleInfo.originalPerson ?? scheduleInfo.person;
       const assigned = scheduleInfo.person;
       plantonista = original;
+      escalaDefinitiva = assigned ?? "";
       if (assigned && original !== assigned) {
         substituto = assigned;
       }
@@ -124,10 +127,130 @@ export async function exportCalendarToExcel({
       Plantonista: plantonista,
       Substituto: substituto,
       Motivo: motivo,
+      "ESCALA DEFINITIVA": escalaDefinitiva,
+      _meta: {
+        workingDay,
+        weekend: date.getDay() === 0 || date.getDay() === 6,
+      },
     };
   });
 
-  const worksheet = XLSX.utils.json_to_sheet(rows);
+  const headers = [
+    "Data",
+    "Dia da semana",
+    "Plantonista",
+    "Substituto",
+    "Motivo",
+    "ESCALA DEFINITIVA",
+  ];
+
+  const title = `Municipio de Hortolandia - Escala de Plantao (${monthFormatter.format(
+    new Date(year, month, 1)
+  )})`;
+
+  const dataRows = rows.map((row) => [
+    row.Data,
+    row["Dia da semana"],
+    row.Plantonista,
+    row.Substituto,
+    row.Motivo,
+    row["ESCALA DEFINITIVA"],
+  ]);
+
+  const worksheet = XLSX.utils.aoa_to_sheet([[title], headers, ...dataRows]);
+
+  const lastCol = String.fromCharCode(64 + headers.length);
+  worksheet["!merges"] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } },
+  ];
+  worksheet["!autofilter"] = { ref: `A2:${lastCol}2` };
+  worksheet["!freeze"] = {
+    xSplit: 0,
+    ySplit: 2,
+    topLeftCell: "A3",
+    activePane: "bottomLeft",
+    state: "frozen",
+  };
+
+  const baseBorder = {
+    top: { style: "thin", color: { rgb: "D1D5DB" } },
+    bottom: { style: "thin", color: { rgb: "D1D5DB" } },
+    left: { style: "thin", color: { rgb: "D1D5DB" } },
+    right: { style: "thin", color: { rgb: "D1D5DB" } },
+  };
+
+  const titleStyle = {
+    font: { bold: true, sz: 14, color: { rgb: "111827" } },
+    alignment: { horizontal: "center", vertical: "center" },
+  };
+
+  const headerStyle = {
+    font: { bold: true, color: { rgb: "111827" } },
+    alignment: { horizontal: "center", vertical: "center", wrapText: true },
+    fill: { patternType: "solid", fgColor: { rgb: "E5E7EB" } },
+    border: baseBorder,
+  };
+
+  const zebraFill = { patternType: "solid", fgColor: { rgb: "F8FAFC" } };
+  const nonWorkingFill = { patternType: "solid", fgColor: { rgb: "FFF4E5" } };
+
+  const setCell = (
+    cellRef: string,
+    value: string,
+    style: Record<string, unknown>
+  ) => {
+    worksheet[cellRef] = { t: "s", v: value, s: style };
+  };
+
+  // Title row
+  setCell("A1", title, titleStyle);
+
+  // Header row (row 2)
+  headers.forEach((header, index) => {
+    const cellRef = XLSX.utils.encode_cell({ r: 1, c: index });
+    worksheet[cellRef].s = headerStyle;
+  });
+
+  // Data rows start at row 3 (r = 2)
+  rows.forEach((row, rowIndex) => {
+    const dataRowIndex = rowIndex + 2;
+    const isStriped = rowIndex % 2 === 1;
+    const fill =
+      row._meta.workingDay === false ? nonWorkingFill : isStriped ? zebraFill : undefined;
+
+    headers.forEach((header, colIndex) => {
+      const cellRef = XLSX.utils.encode_cell({ r: dataRowIndex, c: colIndex });
+      const cell = worksheet[cellRef];
+      if (!cell) {
+        worksheet[cellRef] = { t: "s", v: "" };
+      }
+
+      const isMotivo = header === "Motivo";
+      const isDate = header === "Data" || header === "Dia da semana";
+
+      worksheet[cellRef].s = {
+        border: baseBorder,
+        fill,
+        alignment: {
+          horizontal: isDate ? "center" : "left",
+          vertical: "top",
+          wrapText: isMotivo,
+        },
+      };
+    });
+  });
+
+  const columnWidths = headers.map((header, colIndex) => {
+    const contentLengths = dataRows.map((row) => String(row[colIndex] ?? "").length);
+    const maxContent = Math.max(header.length, ...contentLengths);
+    const minWidth =
+      header === "Motivo" ? 32 : header === "ESCALA DEFINITIVA" ? 24 : 14;
+    const width = Math.min(Math.max(maxContent + 2, minWidth), 40);
+    return { wch: width };
+  });
+
+  worksheet["!cols"] = columnWidths;
+
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "Escala");
 

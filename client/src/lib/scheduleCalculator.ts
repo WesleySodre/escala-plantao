@@ -107,6 +107,16 @@ function normalizeDate(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
+function getScaleEffectiveFrom(scale: Scale): Date | null {
+  if (!scale.effectiveFrom) return null;
+  return dateFromString(scale.effectiveFrom);
+}
+
+function getScaleInactiveFrom(scale: Scale): Date | null {
+  if (!scale.inactiveFrom) return null;
+  return dateFromString(scale.inactiveFrom);
+}
+
 function isBeforeCutoff(date: Date): boolean {
   const cutoff = dateFromString(SCHEDULE_CUTOFF_DATE);
   if (!cutoff) return false;
@@ -249,12 +259,67 @@ function isScaleWorkingDay(date: Date, scale: Scale, holidays?: string[]): boole
   return scale.weekdays.includes(date.getDay());
 }
 
+function findFirstScaleWorkingDayOnOrAfter(
+  startDate: Date,
+  scale: Scale,
+  holidays?: string[]
+): Date | null {
+  const cursor = normalizeDate(startDate);
+  let safety = 0;
+  const safetyLimit = 370;
+
+  while (safety < safetyLimit) {
+    if (isScaleWorkingDay(cursor, scale, holidays)) {
+      return new Date(cursor);
+    }
+    cursor.setDate(cursor.getDate() + 1);
+    safety += 1;
+  }
+
+  return null;
+}
+
 export function getActiveScaleForDate(date: Date, scales: Scale[]): Scale | null {
   const dayOfWeek = date.getDay();
-  const match = scales.find(
-    (scale) => scale.isActive && scale.weekdays.includes(dayOfWeek)
-  );
-  return match ?? null;
+  const normalizedTarget = normalizeDate(date);
+  let selected: Scale | null = null;
+  let selectedStart = Number.NEGATIVE_INFINITY;
+  let selectedCreated = Number.NEGATIVE_INFINITY;
+
+  scales.forEach((scale) => {
+    if (!scale.weekdays.includes(dayOfWeek)) return;
+
+    const effectiveFrom = getScaleEffectiveFrom(scale);
+    if (effectiveFrom && normalizeDate(effectiveFrom) > normalizedTarget) {
+      return;
+    }
+
+    const inactiveFrom = getScaleInactiveFrom(scale);
+    if (inactiveFrom) {
+      if (normalizeDate(inactiveFrom) <= normalizedTarget) {
+        return;
+      }
+    } else if (!scale.isActive) {
+      return;
+    }
+
+    const startTs = effectiveFrom ? normalizeDate(effectiveFrom).getTime() : Number.NEGATIVE_INFINITY;
+    const createdTs = scale.createdAt
+      ? dateFromString(scale.createdAt)?.getTime() ?? Number.NEGATIVE_INFINITY
+      : Number.NEGATIVE_INFINITY;
+
+    if (
+      !selected ||
+      startTs > selectedStart ||
+      (startTs === selectedStart && createdTs > selectedCreated)
+    ) {
+      selected = scale;
+      selectedStart = startTs;
+      selectedCreated = createdTs;
+    }
+  });
+
+  return selected;
 }
 
 const DEFAULT_AUTO_FRIDAY_SWAP: AutoFridaySwapConfig = {
@@ -362,13 +427,27 @@ function getAssignmentWithAdvancement(
   isPersonOnTimeOff?: (person: string, dateStr: string) => boolean,
   holidays?: string[]
 ): { person: TeamMember; original: TeamMember } | null {
-  const anchorDate =
-    (scale.anchorDate && dateFromString(scale.anchorDate)) ||
-    (scale.createdAt && dateFromString(scale.createdAt)) ||
-    targetDate;
+  const rawAnchorDate = scale.anchorDate ? dateFromString(scale.anchorDate) : null;
+  const fallbackAnchorDate =
+    (scale.createdAt && dateFromString(scale.createdAt)) || rawAnchorDate || targetDate;
+  const anchorStartDate = rawAnchorDate
+    ? findFirstScaleWorkingDayOnOrAfter(rawAnchorDate, scale, holidays)
+    : null;
+  const normalizedTarget = normalizeDate(targetDate);
+  const useAnchor =
+    Boolean(scale.anchorMemberId) &&
+    Boolean(anchorStartDate) &&
+    anchorStartDate !== null &&
+    normalizedTarget >= anchorStartDate;
+  const anchorMemberIdForStart = useAnchor
+    ? scale.anchorMemberId
+    : rawAnchorDate
+    ? undefined
+    : scale.anchorMemberId;
+  const cursorStart = useAnchor && anchorStartDate ? anchorStartDate : fallbackAnchorDate;
 
   let pointerMemberId: string | null = null;
-  const cursor = new Date(anchorDate);
+  const cursor = new Date(cursorStart);
 
   while (cursor <= targetDate) {
     if (!isScaleWorkingDay(cursor, scale, holidays)) {
@@ -389,9 +468,9 @@ function getAssignmentWithAdvancement(
     if (pointerMemberId) {
       const pointerIndex = rotationOrder.findIndex((member) => member.id === pointerMemberId);
       startIndex = pointerIndex >= 0 ? (pointerIndex + 1) % rotationOrder.length : 0;
-    } else if (isSameDate(cursor, anchorDate) && scale.anchorMemberId) {
+    } else if (anchorMemberIdForStart && isSameDate(cursor, cursorStart)) {
       const anchorIndex = rotationOrder.findIndex(
-        (member) => member.id === scale.anchorMemberId
+        (member) => member.id === anchorMemberIdForStart
       );
       startIndex = anchorIndex >= 0 ? anchorIndex : 0;
     }
@@ -418,7 +497,11 @@ function getAssignmentWithAdvancement(
       }
     }
 
-    pointerMemberId = assignedInfo.member.id;
+    if (useAnchor && anchorMemberIdForStart && isSameDate(cursor, cursorStart)) {
+      pointerMemberId = anchorMemberIdForStart;
+    } else {
+      pointerMemberId = assignedInfo.member.id;
+    }
 
     if (isSameDate(cursor, targetDate)) {
       return { person: assignedInfo.member, original: originalInfo.member };

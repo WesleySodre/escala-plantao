@@ -43,6 +43,8 @@ export interface Scale {
   rotationMemberIds: string[];
   isActive: boolean;
   createdAt: string;
+  effectiveFrom?: string; // YYYY-MM-DD (quando a escala passa a valer)
+  inactiveFrom?: string; // YYYY-MM-DD (quando a escala deixa de valer)
   anchorDate?: string;
   anchorMemberId?: string;
   autoFridaySwap?: AutoFridaySwapConfig;

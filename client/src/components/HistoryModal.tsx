@@ -1,15 +1,8 @@
 import { useEffect, useState } from "react";
-import { Clock } from "lucide-react";
+import { Redo2, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { adminLogout, getAdminJwt, isAdmin } from "@/auth/adminAuth";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
 
 type HistoryItem = {
   id: number;
@@ -20,40 +13,37 @@ interface HistoryModalProps {
   reloadState?: () => Promise<boolean> | Promise<void>;
 }
 
+const HISTORY_ACTIVE_KEY = "historyActiveId";
+
 export default function HistoryModal({ reloadState }: HistoryModalProps) {
   const admin = isAdmin();
-  const [open, setOpen] = useState(false);
-  const [items, setItems] = useState<HistoryItem[]>([]);
+  const [historyStack, setHistoryStack] = useState<HistoryItem[]>([]);
+  const [historyPointer, setHistoryPointer] = useState(-1);
+  const [activeHistoryId, setActiveHistoryId] = useState<number | null>(() => {
+    try {
+      const stored = sessionStorage.getItem(HISTORY_ACTIVE_KEY);
+      const parsed = stored ? Number(stored) : NaN;
+      return Number.isFinite(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  });
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [restoringId, setRestoringId] = useState<number | null>(null);
-
-  if (!admin) return null;
+  const [busyAction, setBusyAction] = useState<"undo" | "redo" | null>(null);
 
   const handleAdminExpired = () => {
     adminLogout();
-    alert("Sessão expirada. Entre como admin novamente.");
+    alert("Sessao expirada. Entre como admin novamente.");
   };
 
-  const formatHistoryDateTime = (value: string) => {
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) return value;
-    return new Intl.DateTimeFormat("pt-BR", {
-      dateStyle: "short",
-      timeStyle: "short",
-    }).format(parsed);
-  };
-
-  const fetchHistory = async () => {
+  const fetchHistory = async (desiredActiveId?: number | null) => {
     const token = getAdminJwt();
     if (!token) {
       handleAdminExpired();
-      setOpen(false);
       return;
     }
 
     setLoading(true);
-    setError(null);
 
     try {
       const res = await fetch("/.netlify/functions/list-history", {
@@ -64,42 +54,50 @@ export default function HistoryModal({ reloadState }: HistoryModalProps) {
 
       if (res.status === 401) {
         handleAdminExpired();
-        setOpen(false);
         return;
       }
 
       if (!res.ok) {
         const text = await res.text();
-        console.error("Erro ao carregar histórico:", text);
-        setError("Não foi possível carregar o histórico.");
+        console.error("Erro ao carregar historico:", text);
+        toast.error("Nao foi possivel carregar o historico.");
         return;
       }
 
       const payload = await res.json();
-      const nextItems = Array.isArray(payload?.items) ? payload.items : [];
-      setItems(nextItems);
+      const nextItems: HistoryItem[] = Array.isArray(payload?.items) ? payload.items : [];
+      setHistoryStack(nextItems);
+
+      const activeId = typeof desiredActiveId !== "undefined" ? desiredActiveId : activeHistoryId;
+      if (activeId) {
+        const index = nextItems.findIndex((item) => item.id === activeId);
+        if (index >= 0) {
+          setHistoryPointer(index);
+          setActiveHistoryId(activeId);
+          return;
+        }
+        setHistoryPointer(-1);
+        setActiveHistoryId(null);
+        return;
+      }
+
+      setHistoryPointer(-1);
     } catch (err) {
-      console.error("Erro ao carregar histórico:", err);
-      setError("Não foi possível carregar o histórico.");
+      console.error("Erro ao carregar historico:", err);
+      toast.error("Nao foi possivel carregar o historico.");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleRestoreHistory = async (historyId: number) => {
+  const handleRestoreHistory = async (historyId: number, action: "undo" | "redo") => {
     const token = getAdminJwt();
     if (!token) {
       handleAdminExpired();
-      setOpen(false);
       return;
     }
 
-    const confirmed = window.confirm(
-      "Tem certeza que deseja restaurar esta versão? A versão atual será salva automaticamente."
-    );
-    if (!confirmed) return;
-
-    setRestoringId(historyId);
+    setBusyAction(action);
 
     try {
       const res = await fetch("/.netlify/functions/restore-history", {
@@ -113,14 +111,13 @@ export default function HistoryModal({ reloadState }: HistoryModalProps) {
 
       if (res.status === 401) {
         handleAdminExpired();
-        setOpen(false);
         return;
       }
 
       if (!res.ok) {
         const text = await res.text();
-        console.error("Erro ao restaurar histórico:", text);
-        toast.error("Não foi possível restaurar a versão.");
+        console.error("Erro ao restaurar historico:", text);
+        toast.error("Nao foi possivel restaurar a versao.");
         return;
       }
 
@@ -128,70 +125,77 @@ export default function HistoryModal({ reloadState }: HistoryModalProps) {
         await reloadState();
       }
 
-      setOpen(false);
-      toast.success("Versão restaurada com sucesso.");
+      setActiveHistoryId(historyId);
+      await fetchHistory(historyId);
+      toast.success(action === "undo" ? "Desfazer aplicado." : "Refazer aplicado.");
     } catch (err) {
-      console.error("Erro ao restaurar histórico:", err);
-      toast.error("Não foi possível restaurar a versão.");
+      console.error("Erro ao restaurar historico:", err);
+      toast.error("Nao foi possivel restaurar a versao.");
     } finally {
-      setRestoringId(null);
+      setBusyAction(null);
     }
   };
 
   useEffect(() => {
-    if (!open) return;
+    if (!admin) return;
     fetchHistory();
-  }, [open]);
+  }, [admin]);
+
+  useEffect(() => {
+    try {
+      if (activeHistoryId) {
+        sessionStorage.setItem(HISTORY_ACTIVE_KEY, String(activeHistoryId));
+      } else {
+        sessionStorage.removeItem(HISTORY_ACTIVE_KEY);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [activeHistoryId]);
+
+  const canUndo = historyPointer < historyStack.length - 1;
+  const canRedo = historyPointer > 0;
+
+  const handleUndo = async () => {
+    if (!canUndo || loading || busyAction) return;
+    const targetIndex = historyPointer + 1;
+    const target = historyStack[targetIndex];
+    if (!target) return;
+    await handleRestoreHistory(target.id, "undo");
+  };
+
+  const handleRedo = async () => {
+    if (!canRedo || loading || busyAction) return;
+    const targetIndex = historyPointer - 1;
+    const target = historyStack[targetIndex];
+    if (!target) return;
+    await handleRestoreHistory(target.id, "redo");
+  };
+
+  if (!admin) return null;
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button
-          variant="link"
-          className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
-        >
-          <Clock size={12} className="mr-1" />
-          Ver versões anteriores
-        </Button>
-      </DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Histórico de versões</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4">
-          {loading ? (
-            <p className="text-sm text-muted-foreground">Carregando histórico...</p>
-          ) : error ? (
-            <p className="text-sm text-destructive">{error}</p>
-          ) : items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Nenhuma versão registrada</p>
-          ) : (
-            <div className="space-y-2 max-h-96 overflow-y-auto">
-              {items.map((item) => (
-                <div
-                  key={item.id}
-                  className="flex items-center justify-between p-3 bg-secondary rounded-lg"
-                >
-                  <div className="flex-1">
-                    <div className="text-sm font-medium text-foreground">
-                      {formatHistoryDateTime(item.created_at)}
-                    </div>
-                    <div className="text-xs text-muted-foreground">ID {item.id}</div>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleRestoreHistory(item.id)}
-                    disabled={restoringId === item.id}
-                  >
-                    {restoringId === item.id ? "Restaurando..." : "Restaurar"}
-                  </Button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
+    <div className="flex items-center gap-2">
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={handleUndo}
+        disabled={!canUndo || loading || busyAction !== null}
+        className="gap-1"
+      >
+        <Undo2 size={14} />
+        Desfazer
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={handleRedo}
+        disabled={!canRedo || loading || busyAction !== null}
+        className="gap-1"
+      >
+        <Redo2 size={14} />
+        Refazer
+      </Button>
+    </div>
   );
 }
