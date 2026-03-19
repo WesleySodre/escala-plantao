@@ -56,6 +56,22 @@ export interface Holiday {
   name: string;
 }
 
+interface AppState {
+  teamMembers: TeamMember[];
+  timeOffs: TimeOff[];
+  shiftSwaps: ShiftSwap[];
+  scales: Scale[];
+  holidays: Holiday[];
+}
+
+interface HistoryState {
+  past: AppState[];
+  present: AppState;
+  future: AppState[];
+}
+
+const areStatesEqual = (a: AppState, b: AppState) => JSON.stringify(a) === JSON.stringify(b);
+
 export const DEFAULT_HOLIDAYS: Holiday[] = [
   { id: "1", date: "2026-01-01", name: "Ano Novo" },
   { id: "2", date: "2026-01-02", name: "Recesso" },
@@ -161,6 +177,12 @@ interface ScheduleContextType {
 
   // Data Management
   reloadFromSupabase: () => Promise<boolean>;
+
+  // History
+  undo: () => void;
+  redo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
 }
 
 const ScheduleContext = createContext<ScheduleContextType | undefined>(undefined);
@@ -286,7 +308,7 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     });
   };
 
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([
+  const initialTeamMembers: TeamMember[] = [
     {
       id: "1",
       name: "Benedito",
@@ -364,13 +386,23 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       workDays: [1, 2, 3, 4, 5],
       canDoFriday: true,
     },
-  ]);
+  ];
 
-  const [timeOffs, setTimeOffs] = useState<TimeOff[]>([]);
-  const [shiftSwaps, setShiftSwaps] = useState<ShiftSwap[]>([]);
-  const [scales, setScales] = useState<Scale[]>(() => buildDefaultScales(teamMembers));
+  const initialState: AppState = {
+    teamMembers: initialTeamMembers,
+    timeOffs: [],
+    shiftSwaps: [],
+    scales: buildDefaultScales(initialTeamMembers),
+    holidays: DEFAULT_HOLIDAYS,
+  };
 
-  const [holidays, setHolidays] = useState<Holiday[]>(DEFAULT_HOLIDAYS);
+  const [history, setHistory] = useState<HistoryState>(() => ({
+    past: [],
+    present: initialState,
+    future: [],
+  }));
+
+  const { teamMembers, timeOffs, shiftSwaps, scales, holidays } = history.present;
 
   const normalizeTeam = (members: TeamMember[]) =>
     members.map((member) => ({
@@ -386,31 +418,125 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     shiftSwaps?: ShiftSwap[];
     scales?: Scale[];
   }) => {
-    let loadedTeamMembers = teamMembers;
+    setHistory((prev) => {
+      const base = prev.present;
+      let nextTeamMembers = base.teamMembers;
 
-    if (Array.isArray(payload.teamMembers)) {
-      const normalizedTeam = normalizeTeam(payload.teamMembers);
-      setTeamMembers(normalizedTeam);
-      loadedTeamMembers = normalizedTeam;
-    }
+      if (Array.isArray(payload.teamMembers)) {
+        nextTeamMembers = normalizeTeam(payload.teamMembers);
+      }
 
-    if (Array.isArray(payload.timeOffs)) {
-      setTimeOffs(payload.timeOffs);
-    }
+      const nextTimeOffs = Array.isArray(payload.timeOffs) ? payload.timeOffs : base.timeOffs;
+      const nextShiftSwaps = Array.isArray(payload.shiftSwaps)
+        ? payload.shiftSwaps
+        : base.shiftSwaps;
 
-    if (Array.isArray(payload.shiftSwaps)) {
-      setShiftSwaps(payload.shiftSwaps);
-    }
+      let nextScales = base.scales;
+      if (Array.isArray(payload.scales)) {
+        nextScales = normalizeScales(payload.scales, nextTeamMembers);
+      } else if (payload.scales === undefined) {
+        nextScales = buildDefaultScales(nextTeamMembers);
+      }
 
-    if (Array.isArray(payload.scales)) {
-      setScales(normalizeScales(payload.scales, loadedTeamMembers));
-    } else if (payload.scales === undefined) {
-      setScales(buildDefaultScales(loadedTeamMembers));
-    }
+      const nextHolidays = Array.isArray(payload.holidays) ? payload.holidays : base.holidays;
+      const syncedScales = syncScaleMembers(nextTeamMembers, nextScales);
 
-    if (Array.isArray(payload.holidays)) {
-      setHolidays(payload.holidays);
-    }
+      const nextPresent: AppState = {
+        teamMembers: nextTeamMembers,
+        timeOffs: nextTimeOffs,
+        shiftSwaps: nextShiftSwaps,
+        scales: syncedScales,
+        holidays: nextHolidays,
+      };
+
+      return {
+        past: [],
+        present: areStatesEqual(base, nextPresent) ? base : nextPresent,
+        future: [],
+      };
+    });
+  };
+
+  const commit = (updater: (prev: AppState) => AppState) => {
+    setHistory((prevHistory) => {
+      const nextPresent = updater(prevHistory.present);
+      if (nextPresent === prevHistory.present) return prevHistory;
+      if (areStatesEqual(prevHistory.present, nextPresent)) return prevHistory;
+      return {
+        past: [...prevHistory.past, prevHistory.present],
+        present: nextPresent,
+        future: [],
+      };
+    });
+  };
+
+  const commitTeamMembers = (updater: (members: TeamMember[]) => TeamMember[]) => {
+    commit((prev) => {
+      const nextMembers = updater(prev.teamMembers);
+      const nextScales = syncScaleMembers(nextMembers, prev.scales);
+      return {
+        ...prev,
+        teamMembers: nextMembers,
+        scales: nextScales,
+      };
+    });
+  };
+
+  const commitTimeOffs = (updater: (items: TimeOff[]) => TimeOff[]) => {
+    commit((prev) => ({
+      ...prev,
+      timeOffs: updater(prev.timeOffs),
+    }));
+  };
+
+  const commitShiftSwaps = (updater: (items: ShiftSwap[]) => ShiftSwap[]) => {
+    commit((prev) => ({
+      ...prev,
+      shiftSwaps: updater(prev.shiftSwaps),
+    }));
+  };
+
+  const commitScales = (updater: (items: Scale[]) => Scale[]) => {
+    commit((prev) => ({
+      ...prev,
+      scales: updater(prev.scales),
+    }));
+  };
+
+  const commitHolidays = (updater: (items: Holiday[]) => Holiday[]) => {
+    commit((prev) => ({
+      ...prev,
+      holidays: updater(prev.holidays),
+    }));
+  };
+
+  const canUndo = history.past.length > 0;
+  const canRedo = history.future.length > 0;
+
+  const undo = () => {
+    setHistory((prev) => {
+      if (prev.past.length === 0) return prev;
+      const previous = prev.past[prev.past.length - 1];
+      const newPast = prev.past.slice(0, -1);
+      return {
+        past: newPast,
+        present: previous,
+        future: [prev.present, ...prev.future],
+      };
+    });
+  };
+
+  const redo = () => {
+    setHistory((prev) => {
+      if (prev.future.length === 0) return prev;
+      const next = prev.future[0];
+      const newFuture = prev.future.slice(1);
+      return {
+        past: [...prev.past, prev.present],
+        present: next,
+        future: newFuture,
+      };
+    });
   };
 
   const loadFromLocalStorage = () => {
@@ -564,14 +690,6 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     saveState();
   }, [teamMembers, timeOffs, holidays, shiftSwaps, scales]);
 
-  useEffect(() => {
-    setScales((prev) => {
-      const next = syncScaleMembers(teamMembers, prev);
-      const unchanged = JSON.stringify(prev) === JSON.stringify(next);
-      return unchanged ? prev : next;
-    });
-  }, [teamMembers]);
-
   const addTeamMember = (name: string) => {
     const newMember: TeamMember = {
       id: Date.now().toString(),
@@ -580,46 +698,45 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       workDays: [1, 2, 3, 4, 5], // Por padrão, todos os dias
       canDoFriday: true,
     };
-    setTeamMembers([...teamMembers, newMember]);
+    commitTeamMembers((members) => [...members, newMember]);
   };
 
   const removeTeamMember = (id: string, removeDate?: string) => {
-    if (removeDate) {
-      // Exclusão com data de início: apenas adiciona removeDate
-      setTeamMembers(
-        teamMembers.map((member) =>
+    commitTeamMembers((members) => {
+      if (removeDate) {
+        // Exclusão com data de início: apenas adiciona removeDate
+        return members.map((member) =>
           member.id === id ? { ...member, removeDate } : member
-        )
-      );
-    } else {
+        );
+      }
       // Exclusão completa
-      setTeamMembers(teamMembers.filter((member) => member.id !== id));
-    }
+      return members.filter((member) => member.id !== id);
+    });
   };
 
   const updateTeamMemberWorkDays = (id: string, workDays: number[]) => {
-    setTeamMembers(
-      teamMembers.map((member) =>
-        member.id === id ? { ...member, workDays } : member
-      )
+    commitTeamMembers((members) =>
+      members.map((member) => (member.id === id ? { ...member, workDays } : member))
     );
   };
 
   const updateTeamMemberCanDoFriday = (id: string, canDoFriday: boolean) => {
-    setTeamMembers(
-      teamMembers.map((member) =>
+    commitTeamMembers((members) =>
+      members.map((member) =>
         member.id === id ? { ...member, canDoFriday } : member
       )
     );
   };
 
   const reorderTeamMembers = (newOrder: string[]) => {
-    const reorderedMembers = newOrder
-      .map((id) => teamMembers.find((member) => member.id === id))
-      .filter((member) => member !== undefined) as TeamMember[];
-    const orderSet = new Set(newOrder);
-    const remainingMembers = teamMembers.filter((member) => !orderSet.has(member.id));
-    setTeamMembers([...reorderedMembers, ...remainingMembers]);
+    commitTeamMembers((members) => {
+      const reorderedMembers = newOrder
+        .map((id) => members.find((member) => member.id === id))
+        .filter((member) => member !== undefined) as TeamMember[];
+      const orderSet = new Set(newOrder);
+      const remainingMembers = members.filter((member) => !orderSet.has(member.id));
+      return [...reorderedMembers, ...remainingMembers];
+    });
   };
 
   const addTimeOff = (
@@ -635,11 +752,11 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       type,
       daysCount,
     };
-    setTimeOffs([...timeOffs, newTimeOff]);
+    commitTimeOffs((items) => [...items, newTimeOff]);
   };
 
   const removeTimeOff = (id: string) => {
-    setTimeOffs(timeOffs.filter((timeOff) => timeOff.id !== id));
+    commitTimeOffs((items) => items.filter((timeOff) => timeOff.id !== id));
   };
 
   const getTimeOffForPerson = (personName: string, date: string): TimeOff | undefined => {
@@ -673,37 +790,44 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       substitutePerson,
       reason,
     };
-    setShiftSwaps([...shiftSwaps, newSwap]);
+    commitShiftSwaps((items) => [...items, newSwap]);
   };
 
   const updateShiftSwap = (id: string, updates: Partial<ShiftSwap>) => {
-    setShiftSwaps(
-      shiftSwaps.map((swap) => (swap.id === id ? { ...swap, ...updates } : swap))
+    commitShiftSwaps((items) =>
+      items.map((swap) => (swap.id === id ? { ...swap, ...updates } : swap))
     );
   };
 
   const removeShiftSwap = (id: string) => {
-    setShiftSwaps(shiftSwaps.filter((swap) => swap.id !== id));
+    commitShiftSwaps((items) => items.filter((swap) => swap.id !== id));
   };
 
   const addScale = (scale: Scale) => {
-    setScales([...scales, scale]);
+    commitScales((items) => [...items, scale]);
   };
 
   const updateScale = (id: string, updates: Partial<Scale>) => {
-    setScales(scales.map((scale) => (scale.id === id ? { ...scale, ...updates } : scale)));
+    commitScales((items) =>
+      items.map((scale) => (scale.id === id ? { ...scale, ...updates } : scale))
+    );
   };
 
   const removeScale = (id: string) => {
-    setScales(scales.filter((scale) => scale.id !== id));
+    commitScales((items) => items.filter((scale) => scale.id !== id));
   };
 
   const toggleScaleActive = (id: string, isActive: boolean) => {
-    setScales(scales.map((scale) => (scale.id === id ? { ...scale, isActive } : scale)));
+    commitScales((items) =>
+      items.map((scale) => (scale.id === id ? { ...scale, isActive } : scale))
+    );
   };
 
   const restoreDefaultScales = () => {
-    setScales(buildDefaultScales(teamMembers));
+    commit((prev) => ({
+      ...prev,
+      scales: buildDefaultScales(prev.teamMembers),
+    }));
   };
 
   const addHoliday = (date: string, name: string) => {
@@ -712,11 +836,11 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       date,
       name,
     };
-    setHolidays([...holidays, newHoliday]);
+    commitHolidays((items) => [...items, newHoliday]);
   };
 
   const removeHoliday = (id: string) => {
-    setHolidays(holidays.filter((holiday) => holiday.id !== id));
+    commitHolidays((items) => items.filter((holiday) => holiday.id !== id));
   };
 
   const isHolidayDate = (date: string): boolean => {
@@ -724,7 +848,7 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const replaceHolidays = (nextHolidays: Holiday[]) => {
-    setHolidays(nextHolidays);
+    commitHolidays(() => nextHolidays);
   };
 
   return (
@@ -757,6 +881,10 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         isHolidayDate,
         replaceHolidays,
         reloadFromSupabase,
+        undo,
+        redo,
+        canUndo,
+        canRedo,
       }}
     >
       {children}
