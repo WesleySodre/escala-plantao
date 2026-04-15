@@ -139,6 +139,7 @@ export async function exportCalendarToPdf({
 
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
+  const pageMargin = 10;
 
   const headerLines = [
     "PODER JUDICI\u00c1RIO DO ESTADO DE S\u00c3O PAULO",
@@ -148,11 +149,11 @@ export async function exportCalendarToPdf({
     "E-mail: hortolandia@tjsp.jus.br",
   ];
 
-  const headerStartY = 12;
+  const headerStartY = pageMargin;
   const headerLineHeight = 4;
   const crestWidth = 38;
   const crestHeight = (crestWidth * 127) / 299;
-  const crestX = 14;
+  const crestX = pageMargin;
   const crestY = headerStartY - 3;
 
   try {
@@ -175,7 +176,7 @@ export async function exportCalendarToPdf({
 
   const headerBottom = headerStartY + headerLines.length * headerLineHeight + 2;
   pdf.setLineWidth(0.3);
-  pdf.line(14, headerBottom, pageWidth - 14, headerBottom);
+  pdf.line(pageMargin, headerBottom, pageWidth - pageMargin, headerBottom);
 
   pdf.setFont("helvetica", "bold");
   pdf.setFontSize(11);
@@ -191,10 +192,13 @@ export async function exportCalendarToPdf({
     align: "center",
   });
 
-  const tableWidth = 120;
-  const tableX = (pageWidth - tableWidth) / 2;
-  const colWidths = [14, 32, tableWidth - 46];
-  const rowHeight = 7;
+  const tableWidth = pageWidth - pageMargin * 2;
+  const tableX = pageMargin;
+  const colWidths = [20, 45, tableWidth - 65];
+  const tableFontSize = 13;
+  const minRowHeight = 10;
+  const cellPadding = 5;
+  const lineHeight = 5.2;
   let cursorY = headerBottom + 22;
 
   const drawRow = (
@@ -206,9 +210,19 @@ export async function exportCalendarToPdf({
     muted: boolean,
     holiday: boolean
   ) => {
-    if (cursorY + rowHeight > pageHeight - 15) {
+    pdf.setFont("helvetica", holiday ? "bolditalic" : "normal");
+    pdf.setFontSize(tableFontSize);
+
+    const nameMaxWidth = colWidths[2] - cellPadding * 2;
+    const nameLines = pdf.splitTextToSize(name, nameMaxWidth) as string[];
+    const rowHeight = Math.max(
+      minRowHeight,
+      nameLines.length * lineHeight + cellPadding
+    );
+
+    if (cursorY + rowHeight > pageHeight - pageMargin) {
       pdf.addPage();
-      cursorY = 20;
+      cursorY = pageMargin;
     }
 
     if (holiday) {
@@ -225,17 +239,27 @@ export async function exportCalendarToPdf({
     pdf.rect(tableX + colWidths[0], cursorY, colWidths[1], rowHeight);
     pdf.rect(tableX + colWidths[0] + colWidths[1], cursorY, colWidths[2], rowHeight);
 
-    pdf.setFont("helvetica", holiday ? "bolditalic" : "normal");
-    pdf.setFontSize(9);
     pdf.setTextColor(holiday ? 20 : muted ? 120 : 20);
 
-    pdf.text(dayLabel, tableX + colWidths[0] / 2, cursorY + 4.6, {
+    const textY = cursorY + rowHeight / 2;
+    const nameStartY = textY - ((nameLines.length - 1) * lineHeight) / 2;
+
+    pdf.text(dayLabel, tableX + colWidths[0] / 2, textY, {
       align: "center",
+      baseline: "middle",
     });
-    pdf.text(weekdayLabel, tableX + colWidths[0] + colWidths[1] / 2, cursorY + 4.6, {
+    pdf.text(weekdayLabel, tableX + colWidths[0] + colWidths[1] / 2, textY, {
       align: "center",
+      baseline: "middle",
     });
-    pdf.text(name, tableX + colWidths[0] + colWidths[1] + 2, cursorY + 4.6);
+    nameLines.forEach((line, index) => {
+      pdf.text(
+        line,
+        tableX + colWidths[0] + colWidths[1] + cellPadding,
+        nameStartY + index * lineHeight,
+        { baseline: "middle" }
+      );
+    });
 
     cursorY += rowHeight;
   };
