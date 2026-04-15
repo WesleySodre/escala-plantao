@@ -107,6 +107,10 @@ function normalizeDate(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
+function isSameMonth(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
+}
+
 function getScaleEffectiveFrom(scale: Scale): Date | null {
   if (!scale.effectiveFrom) return null;
   return dateFromString(scale.effectiveFrom);
@@ -133,6 +137,14 @@ function isSameDate(a: Date, b: Date): boolean {
     a.getMonth() === b.getMonth() &&
     a.getDate() === b.getDate()
   );
+}
+
+function canMemberServeDate(member: TeamMember, date: Date): boolean {
+  return date.getDay() !== 5 || member.canDoFriday !== false;
+}
+
+function isAssignmentPersonValid(assignment: Assignment): boolean {
+  return canMemberServeDate(assignment.person, assignment.date);
 }
 
 function normalizeName(value: string): string {
@@ -327,6 +339,7 @@ const DEFAULT_AUTO_FRIDAY_SWAP: AutoFridaySwapConfig = {
   queueMemberIds: [],
   queuePointer: 0,
   compensationMode: "next",
+  sameMonthOnly: false,
 };
 
 function normalizeAutoFridaySwapConfig(
@@ -356,6 +369,7 @@ function normalizeAutoFridaySwapConfig(
     queueMemberIds,
     queuePointer: normalizedPointer,
     compensationMode,
+    sameMonthOnly: Boolean(base.sameMonthOnly),
   };
 }
 
@@ -616,18 +630,27 @@ function searchCompensationDate(
   startDate: Date,
   direction: -1 | 1,
   substituteId: string,
+  compensationPerson: TeamMember,
   teamMembers: TeamMember[],
   scales: Scale[],
   isPersonOnTimeOff?: (person: string, dateStr: string) => boolean,
-  holidays?: string[]
+  holidays?: string[],
+  limitToSameMonthAs?: Date
 ): Date | null {
   const cursor = new Date(startDate);
   let safety = 0;
 
   while (safety < MAX_COMPENSATION_LOOKUP_DAYS) {
     cursor.setDate(cursor.getDate() + direction);
+    if (limitToSameMonthAs && !isSameMonth(cursor, limitToSameMonthAs)) {
+      return null;
+    }
     const assignment = getBaseAssignment(cursor, teamMembers, scales, isPersonOnTimeOff, holidays);
-    if (assignment && assignment.person.id === substituteId) {
+    if (
+      assignment &&
+      assignment.person.id === substituteId &&
+      canMemberServeDate(compensationPerson, cursor)
+    ) {
       return new Date(cursor);
     }
     safety += 1;
@@ -639,7 +662,9 @@ function searchCompensationDate(
 function findCompensationDate(
   fridayDate: Date,
   substituteId: string,
+  compensationPerson: TeamMember,
   mode: AutoFridaySwapConfig["compensationMode"],
+  sameMonthOnly: boolean | undefined,
   teamMembers: TeamMember[],
   scales: Scale[],
   isPersonOnTimeOff?: (person: string, dateStr: string) => boolean,
@@ -650,6 +675,7 @@ function findCompensationDate(
       fridayDate,
       -1,
       substituteId,
+      compensationPerson,
       teamMembers,
       scales,
       isPersonOnTimeOff,
@@ -662,6 +688,7 @@ function findCompensationDate(
       fridayDate,
       1,
       substituteId,
+      compensationPerson,
       teamMembers,
       scales,
       isPersonOnTimeOff,
@@ -669,23 +696,28 @@ function findCompensationDate(
     );
   }
 
+  const nearestMonthLimit = sameMonthOnly ? fridayDate : undefined;
   const previous = searchCompensationDate(
     fridayDate,
     -1,
     substituteId,
+    compensationPerson,
     teamMembers,
     scales,
     isPersonOnTimeOff,
-    holidays
+    holidays,
+    nearestMonthLimit
   );
   const next = searchCompensationDate(
     fridayDate,
     1,
     substituteId,
+    compensationPerson,
     teamMembers,
     scales,
     isPersonOnTimeOff,
-    holidays
+    holidays,
+    nearestMonthLimit
   );
 
   if (previous && next) {
@@ -717,11 +749,12 @@ function applyShiftSwapsToAssignments(
     const eligibleMembers = getEligibleMembers(rotationOrder, parsedDate);
     const substituteMember = findMemberByName(eligibleMembers, swap.substitutePerson);
     if (!substituteMember) return;
+    if (!canMemberServeDate(substituteMember, parsedDate)) return;
 
     const originalMember =
       findMemberByName(eligibleMembers, swap.originalPerson) ?? current.original;
 
-    assignments.set(dateStr, {
+    setAssignmentIfValid(assignments, dateStr, {
       ...current,
       person: substituteMember,
       original: originalMember,
@@ -741,6 +774,18 @@ function assignmentToScheduleInfo(assignment: Assignment): ScheduleInfo {
     isHoliday: assignment.isHoliday,
     swapReason: assignment.swapReason,
   };
+}
+
+function setAssignmentIfValid(
+  assignments: Map<string, Assignment>,
+  key: string,
+  assignment: Assignment
+): boolean {
+  if (!isAssignmentPersonValid(assignment)) {
+    return false;
+  }
+  assignments.set(key, assignment);
+  return true;
 }
 
 /**
@@ -815,34 +860,41 @@ function buildScheduleMap(
     if (!substitute) continue;
     if (!isMemberActive(substitute, cursor)) continue;
     if (!memberWorksOnDay(substitute, 5)) continue;
+    if (!canMemberServeDate(substitute, cursor)) continue;
 
     const compensationDate = findCompensationDate(
       cursor,
       substituteId,
+      titular,
       state.config.compensationMode,
+      state.config.sameMonthOnly,
       teamMembers,
       scales,
       isPersonOnTimeOff,
       holidays
     );
-    if (!compensationDate) continue;
 
     state.pointer = (state.pointer + 1) % queue.length;
 
-    effectiveAssignments.set(dateStr, {
+    setAssignmentIfValid(effectiveAssignments, dateStr, {
       ...base,
       person: substitute,
       original: titular,
       swapReason: AUTO_FRIDAY_SWAP_REASON,
     });
 
-    if (compensationDate >= normalizedStart && compensationDate <= normalizedEnd) {
+    if (
+      compensationDate &&
+      compensationDate >= normalizedStart &&
+      compensationDate <= normalizedEnd &&
+      canMemberServeDate(titular, compensationDate)
+    ) {
       const compStr = dateToString(compensationDate);
       const compensationBase =
         baseAssignments.get(compStr) ??
         getBaseAssignment(compensationDate, teamMembers, scales, isPersonOnTimeOff, holidays);
       if (compensationBase) {
-        effectiveAssignments.set(compStr, {
+        setAssignmentIfValid(effectiveAssignments, compStr, {
           ...compensationBase,
           person: titular,
           original: substitute,
@@ -858,6 +910,7 @@ function buildScheduleMap(
 
   const result = new Map<string, ScheduleInfo>();
   effectiveAssignments.forEach((assignment, key) => {
+    if (!isAssignmentPersonValid(assignment)) return;
     result.set(key, assignmentToScheduleInfo(assignment));
   });
 

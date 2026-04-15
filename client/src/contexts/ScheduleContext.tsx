@@ -26,6 +26,7 @@ export interface AutoFridaySwapConfig {
   queueMemberIds: string[];
   queuePointer: number;
   compensationMode: AutoFridayCompensationMode;
+  sameMonthOnly?: boolean;
 }
 
 export interface ShiftSwap {
@@ -131,6 +132,7 @@ const DEFAULT_AUTO_FRIDAY_SWAP: AutoFridaySwapConfig = {
   queueMemberIds: [],
   queuePointer: 0,
   compensationMode: "next",
+  sameMonthOnly: false,
 };
 
 interface ScheduleContextType {
@@ -283,6 +285,7 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       queueMemberIds: queue,
       queuePointer: normalizedPointer,
       compensationMode,
+      sameMonthOnly: Boolean(base.sameMonthOnly),
     };
   };
 

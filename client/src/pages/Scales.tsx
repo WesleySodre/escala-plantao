@@ -64,6 +64,7 @@ const DEFAULT_AUTO_FRIDAY_SWAP = {
   queueMemberIds: [] as string[],
   queuePointer: 0,
   compensationMode: "next" as const,
+  sameMonthOnly: false,
 };
 
 export default function Scales() {
@@ -95,6 +96,7 @@ export default function Scales() {
   const [autoFridayCompensationMode, setAutoFridayCompensationMode] = useState<
     "previous" | "next" | "nearest"
   >("next");
+  const [autoFridaySameMonthOnly, setAutoFridaySameMonthOnly] = useState(false);
   const [queueDragIndex, setQueueDragIndex] = useState<number | null>(null);
   const [showDeactivateDialog, setShowDeactivateDialog] = useState(false);
   const [pendingDeactivateScale, setPendingDeactivateScale] = useState<Scale | null>(null);
@@ -170,14 +172,12 @@ export default function Scales() {
   const normalizeQueueOrder = (order: string[]) => {
     const memberIds = activeMembersToday.map((member) => member.id);
     const seen = new Set<string>();
-    const filtered = order.filter((id) => {
+    return order.filter((id) => {
       if (!memberIds.includes(id)) return false;
       if (seen.has(id)) return false;
       seen.add(id);
       return true;
     });
-    const missing = memberIds.filter((id) => !seen.has(id));
-    return [...filtered, ...missing];
   };
 
   const getUncoveredWeekdays = (nextScales: Scale[]) => {
@@ -235,15 +235,18 @@ export default function Scales() {
     setAutoFridayEnabled(false);
     setAutoFridayQueue(activeMembersToday.map((member) => member.id));
     setAutoFridayCompensationMode("next");
+    setAutoFridaySameMonthOnly(false);
     setShowScaleDialog(true);
   };
 
   const openEditDialog = (scale: Scale) => {
     const autoFriday = scale.autoFridaySwap ?? DEFAULT_AUTO_FRIDAY_SWAP;
-    const queueSeed =
-      autoFriday.queueMemberIds.length > 0
-        ? autoFriday.queueMemberIds
-        : activeMembersToday.map((member) => member.id);
+    const hasSavedQueue = Array.isArray(scale.autoFridaySwap?.queueMemberIds);
+    const useSavedQueue =
+      hasSavedQueue && (autoFriday.enabled || autoFriday.queueMemberIds.length > 0);
+    const queueSeed = useSavedQueue
+      ? autoFriday.queueMemberIds
+      : activeMembersToday.map((member) => member.id);
     const anchorDateValue = scale.anchorDate ?? "";
     const anchorMemberValue = scale.anchorMemberId ?? "";
     setEditingScaleId(scale.id);
@@ -263,6 +266,7 @@ export default function Scales() {
         ? autoFriday.compensationMode
         : "next"
     );
+    setAutoFridaySameMonthOnly(Boolean(autoFriday.sameMonthOnly));
     setShowScaleDialog(true);
   };
 
@@ -313,6 +317,7 @@ export default function Scales() {
       queueMemberIds: normalizedQueue,
       queuePointer: normalizedPointer,
       compensationMode: autoFridayCompensationMode,
+      sameMonthOnly: autoFridayCompensationMode === "nearest" && autoFridaySameMonthOnly,
     };
     if (normalizedRotation.length === 0) {
       toast.error("Selecione pelo menos um membro na rotação");
@@ -509,6 +514,11 @@ export default function Scales() {
     };
 
   const handleQueueDragEnd = () => {
+    setQueueDragIndex(null);
+  };
+
+  const handleRemoveQueueMember = (memberId: string) => {
+    setAutoFridayQueue((prev) => prev.filter((id) => id !== memberId));
     setQueueDragIndex(null);
   };
 
@@ -871,15 +881,29 @@ export default function Scales() {
                                       queueDragIndex === index ? "opacity-60" : ""
                                     }`}
                                   >
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex min-w-0 items-center gap-2">
                                       <GripVertical
                                         size={14}
                                         className="text-muted-foreground"
                                       />
-                                      <span className="font-medium text-foreground">
+                                      <span className="truncate font-medium text-foreground">
                                         {member?.name ?? "Membro"}
                                       </span>
                                     </div>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        handleRemoveQueueMember(memberId);
+                                      }}
+                                      className="h-7 w-7 text-destructive hover:text-destructive"
+                                      disabled={!admin}
+                                      aria-label={`Remover ${member?.name ?? "membro"} da lista paralela`}
+                                    >
+                                      <Trash2 size={14} />
+                                    </Button>
                                   </div>
                                 );
                               })
@@ -910,6 +934,20 @@ export default function Scales() {
                           ))}
                         </SelectContent>
                       </Select>
+                      {autoFridayCompensationMode === "nearest" && (
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            checked={autoFridaySameMonthOnly}
+                            onCheckedChange={(checked) =>
+                              setAutoFridaySameMonthOnly(checked === true)
+                            }
+                            disabled={!admin}
+                          />
+                          <span className="text-sm font-medium">
+                            Mais próximo dentro do mesmo mês
+                          </span>
+                        </div>
+                      )}
                       <p className="text-xs text-muted-foreground">
                         Anterior = último plantão do substituto, Posterior = próximo, Mais próximo
                         escolhe o mais perto.

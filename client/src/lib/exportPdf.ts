@@ -87,6 +87,7 @@ export async function exportCalendarToPdf({
     name: string;
     weekIndex: number;
     isNonWorking: boolean;
+    isHoliday: boolean;
   }> = [];
 
   let weekIndex = -1;
@@ -126,6 +127,7 @@ export async function exportCalendarToPdf({
       name,
       weekIndex,
       isNonWorking,
+      isHoliday: holidayDay,
     });
   }
 
@@ -201,14 +203,18 @@ export async function exportCalendarToPdf({
     weekdayLabel: string,
     name: string,
     shaded: boolean,
-    muted: boolean
+    muted: boolean,
+    holiday: boolean
   ) => {
     if (cursorY + rowHeight > pageHeight - 15) {
       pdf.addPage();
       cursorY = 20;
     }
 
-    if (shaded) {
+    if (holiday) {
+      pdf.setFillColor(217, 217, 217);
+      pdf.rect(tableX, cursorY, tableWidth, rowHeight, "F");
+    } else if (shaded) {
       pdf.setFillColor(153, 187, 226);
       pdf.rect(tableX, cursorY, tableWidth, rowHeight, "F");
     }
@@ -219,9 +225,9 @@ export async function exportCalendarToPdf({
     pdf.rect(tableX + colWidths[0], cursorY, colWidths[1], rowHeight);
     pdf.rect(tableX + colWidths[0] + colWidths[1], cursorY, colWidths[2], rowHeight);
 
-    pdf.setFont("helvetica", "normal");
+    pdf.setFont("helvetica", holiday ? "bolditalic" : "normal");
     pdf.setFontSize(9);
-    pdf.setTextColor(muted ? 120 : 20);
+    pdf.setTextColor(holiday ? 20 : muted ? 120 : 20);
 
     pdf.text(dayLabel, tableX + colWidths[0] / 2, cursorY + 4.6, {
       align: "center",
@@ -236,7 +242,15 @@ export async function exportCalendarToPdf({
 
   rows.forEach((row, index) => {
     const shaded = row.weekIndex % 2 === 1;
-    drawRow(index, row.dayLabel, row.weekdayLabel, row.name, shaded, row.isNonWorking);
+    drawRow(
+      index,
+      row.dayLabel,
+      row.weekdayLabel,
+      row.name,
+      shaded,
+      row.isNonWorking,
+      row.isHoliday
+    );
   });
 
   pdf.setTextColor(20);
