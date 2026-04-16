@@ -33,6 +33,31 @@ const makeScale = (overrides: Partial<Scale>): Scale => ({
 });
 
 describe("autoFridaySwap", () => {
+  it("redistribui plantoes quando um membro sai apenas da rotacao da escala", () => {
+    const ana = makeMember("a", "Ana");
+    const bruno = makeMember("b", "Bruno");
+    const carla = makeMember("c", "Carla");
+    const teamMembers = [ana, bruno, carla];
+
+    const scale = makeScale({
+      id: "week",
+      name: "Semana",
+      weekdays: [1, 2, 3],
+      rotationMemberIds: [ana.id, carla.id],
+      createdAt: "2026-03-02",
+      anchorDate: "2026-03-02",
+      anchorMemberId: ana.id,
+    });
+
+    const schedule = getMonthSchedule(2026, 2, teamMembers, [scale]);
+    const firstThreeDays = schedule
+      .filter((day) => [2, 3, 4].includes(day.date.getDate()))
+      .map((day) => day.person);
+
+    expect(firstThreeDays).toEqual(["Ana", "Carla", "Ana"]);
+    expect(firstThreeDays).not.toContain("Bruno");
+  });
+
   it("compensa pelo último plantão do substituto (previous)", () => {
     const ana = makeMember("a", "Ana", false);
     const bruno = makeMember("b", "Bruno", true);

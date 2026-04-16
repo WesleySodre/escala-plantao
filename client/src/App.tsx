@@ -9,6 +9,7 @@ import Dashboard from "./pages/Dashboard";
 import Team from "./pages/Team";
 import Holidays from "./pages/Holidays";
 import Scales from "./pages/Scales";
+import Statistics from "./pages/Statistics";
 
 
 function Router() {
@@ -18,6 +19,7 @@ function Router() {
       <Route path={"/equipe"} component={Team} />
       <Route path={"/feriados"} component={Holidays} />
       <Route path={"/escalas"} component={Scales} />
+      <Route path={"/estatisticas"} component={Statistics} />
       <Route path={"/404"} component={NotFound} />
       {/* Final fallback route */}
       <Route component={NotFound} />

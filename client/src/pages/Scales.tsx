@@ -17,6 +17,11 @@ import {
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -115,6 +120,29 @@ export default function Scales() {
     return new Date(year, month - 1, day);
   };
 
+  const dateToString = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+
+  const isValidDateInput = (value: string) => {
+    const parsed = dateFromString(value);
+    return Boolean(parsed && dateToString(parsed) === value);
+  };
+
+  const getDateTime = (value: string | undefined, fallback = Number.NEGATIVE_INFINITY) => {
+    if (!value) return fallback;
+    return dateFromString(value)?.getTime() ?? fallback;
+  };
+
+  const getScaleStartTime = (scale: Scale) =>
+    getDateTime(scale.effectiveFrom ?? scale.createdAt);
+
+  const hasWeekdayOverlap = (a: number[], b: number[]) =>
+    a.some((day) => b.includes(day));
+
   const isMemberActiveOnDate = (member: { joinDate: string; removeDate?: string }, date: Date) => {
     const joinDate = dateFromString(member.joinDate);
     if (joinDate && date < joinDate) return false;
@@ -159,14 +187,12 @@ export default function Scales() {
   const normalizeRotationOrder = (order: string[]) => {
     const memberIds = activeMembersToday.map((member) => member.id);
     const seen = new Set<string>();
-    const filtered = order.filter((id) => {
+    return order.filter((id) => {
       if (!memberIds.includes(id)) return false;
       if (seen.has(id)) return false;
       seen.add(id);
       return true;
     });
-    const missing = memberIds.filter((id) => !seen.has(id));
-    return [...filtered, ...missing];
   };
 
   const normalizeQueueOrder = (order: string[]) => {
@@ -204,17 +230,57 @@ export default function Scales() {
   ) => {
     const conflicts = new Set<number>();
     const normalizedEffectiveFrom = effectiveFrom ?? "";
+    const nextStartTime = getDateTime(normalizedEffectiveFrom);
     scales.forEach((scale) => {
-      if (!scale.isActive) return;
       if (ignoreId && scale.id === ignoreId) return;
+
       const otherEffectiveFrom = scale.effectiveFrom ?? "";
-      if (otherEffectiveFrom !== normalizedEffectiveFrom) return;
+      if (scale.isActive && otherEffectiveFrom === normalizedEffectiveFrom) {
+        scale.weekdays.forEach((day) => {
+          if (weekdays.includes(day)) {
+            conflicts.add(day);
+          }
+        });
+      }
+
+      if (!scale.inactiveFrom) return;
+      const protectedEndTime = getDateTime(scale.inactiveFrom, Number.POSITIVE_INFINITY);
+      if (nextStartTime >= protectedEndTime) return;
+
       scale.weekdays.forEach((day) => {
         if (weekdays.includes(day)) {
           conflicts.add(day);
         }
       });
     });
+    return Array.from(conflicts);
+  };
+
+  const getDeactivationConflictingWeekdays = (scaleToDeactivate: Scale, endDate: string) => {
+    const conflicts = new Set<number>();
+    const protectedStartTime = getScaleStartTime(scaleToDeactivate);
+    const protectedEndTime = getDateTime(endDate, Number.POSITIVE_INFINITY);
+
+    scales.forEach((scale) => {
+      if (scale.id === scaleToDeactivate.id) return;
+      if (!hasWeekdayOverlap(scaleToDeactivate.weekdays, scale.weekdays)) return;
+      if (!scale.isActive && !scale.inactiveFrom) return;
+
+      const otherStartTime = getScaleStartTime(scale);
+      const otherEndTime = scale.inactiveFrom
+        ? getDateTime(scale.inactiveFrom, Number.POSITIVE_INFINITY)
+        : Number.POSITIVE_INFINITY;
+      const rangesOverlap =
+        otherStartTime < protectedEndTime && otherEndTime > protectedStartTime;
+      if (!rangesOverlap) return;
+
+      scale.weekdays.forEach((day) => {
+        if (scaleToDeactivate.weekdays.includes(day)) {
+          conflicts.add(day);
+        }
+      });
+    });
+
     return Array.from(conflicts);
   };
 
@@ -415,6 +481,20 @@ export default function Scales() {
       toast.error("Selecione a data de desativação.");
       return;
     }
+    if (!isValidDateInput(deactivateDate)) {
+      toast.error("Informe uma data de desativacao valida.");
+      return;
+    }
+    const conflicts = getDeactivationConflictingWeekdays(
+      pendingDeactivateScale,
+      deactivateDate
+    );
+    if (conflicts.length > 0) {
+      toast.error(
+        `Outra escala ja cobre ${formatWeekdays(conflicts)} antes dessa data. Escolha a data inicial da nova escala como data de desativacao.`
+      );
+      return;
+    }
     const updates: Partial<Scale> = {
       isActive: false,
       inactiveFrom: deactivateDate,
@@ -514,6 +594,17 @@ export default function Scales() {
     };
 
   const handleQueueDragEnd = () => {
+    setQueueDragIndex(null);
+  };
+
+  const handleRemoveRotationMember = (memberId: string) => {
+    setScaleRotationOrder((prev) => prev.filter((id) => id !== memberId));
+    setAutoFridayQueue((prev) => prev.filter((id) => id !== memberId));
+    if (anchorMemberId === memberId) {
+      setAnchorMemberId("");
+      setAnchorDate("");
+    }
+    setDragIndex(null);
     setQueueDragIndex(null);
   };
 
@@ -810,27 +901,53 @@ export default function Scales() {
                     <Card className="!py-3 !gap-3">
                       <CardContent className="!px-3 pb-3">
                         <div className="space-y-1.5 max-h-56 overflow-auto">
-                          {scaleRotationOrder.map((memberId, index) => {
-                            const member = memberById.get(memberId);
-                            return (
-                              <div
-                                key={memberId}
-                                draggable
-                                onDragStart={handleDragStart(index)}
-                                onDragOver={handleDragOver}
-                                onDrop={handleDrop(index)}
-                                onDragEnd={handleDragEnd}
-                                className="flex items-center justify-between rounded-lg border border-border bg-secondary px-3 py-2 text-sm"
-                              >
-                                <div className="flex items-center gap-2">
-                                  <GripVertical size={14} className="text-muted-foreground" />
-                                  <span className="font-medium text-foreground">
-                                    {member?.name ?? "Membro"}
-                                  </span>
+                          {scaleRotationOrder.length === 0 ? (
+                            <div className="text-xs text-muted-foreground">
+                              Nenhum membro nesta escala.
+                            </div>
+                          ) : (
+                            scaleRotationOrder.map((memberId, index) => {
+                              const member = memberById.get(memberId);
+                              return (
+                                <div
+                                  key={memberId}
+                                  draggable={admin}
+                                  onDragStart={handleDragStart(index)}
+                                  onDragOver={handleDragOver}
+                                  onDrop={handleDrop(index)}
+                                  onDragEnd={handleDragEnd}
+                                  className="flex items-center justify-between rounded-lg border border-border bg-secondary px-3 py-2 text-sm"
+                                >
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    <GripVertical size={14} className="text-muted-foreground" />
+                                    <span className="truncate font-medium text-foreground">
+                                      {member?.name ?? "Membro"}
+                                    </span>
+                                  </div>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon-sm"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          handleRemoveRotationMember(memberId);
+                                        }}
+                                        onPointerDown={(event) => event.stopPropagation()}
+                                        className="h-7 w-7 text-destructive hover:text-destructive"
+                                        disabled={!admin}
+                                        aria-label={`Remover ${member?.name ?? "membro"} desta escala`}
+                                      >
+                                        <Trash2 size={14} />
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Remover desta escala</TooltipContent>
+                                  </Tooltip>
                                 </div>
-                              </div>
-                            );
-                          })}
+                              );
+                            })
+                          )}
                         </div>
                       </CardContent>
                     </Card>

@@ -144,7 +144,10 @@ function canMemberServeDate(member: TeamMember, date: Date): boolean {
 }
 
 function isAssignmentPersonValid(assignment: Assignment): boolean {
-  return canMemberServeDate(assignment.person, assignment.date);
+  return (
+    isMemberActive(assignment.person, assignment.date) &&
+    canMemberServeDate(assignment.person, assignment.date)
+  );
 }
 
 function normalizeName(value: string): string {
@@ -212,14 +215,9 @@ function getOrderedRotationMembers(
   rotationMemberIds: string[]
 ): TeamMember[] {
   const byId = new Map(activeMembers.map((member) => [member.id, member]));
-  const ordered = rotationMemberIds
+  return rotationMemberIds
     .map((id) => byId.get(id))
     .filter(Boolean) as TeamMember[];
-
-  const orderedIds = new Set(ordered.map((member) => member.id));
-  const missing = activeMembers.filter((member) => !orderedIds.has(member.id));
-
-  return [...ordered, ...missing];
 }
 
 /**
@@ -297,6 +295,7 @@ export function getActiveScaleForDate(date: Date, scales: Scale[]): Scale | null
   let selected: Scale | null = null;
   let selectedStart = Number.NEGATIVE_INFINITY;
   let selectedCreated = Number.NEGATIVE_INFINITY;
+  let selectedHasEndDate = false;
 
   scales.forEach((scale) => {
     if (!scale.weekdays.includes(dayOfWeek)) return;
@@ -315,19 +314,25 @@ export function getActiveScaleForDate(date: Date, scales: Scale[]): Scale | null
       return;
     }
 
-    const startTs = effectiveFrom ? normalizeDate(effectiveFrom).getTime() : Number.NEGATIVE_INFINITY;
+    const hasEndDate = Boolean(inactiveFrom);
+    const startTs = effectiveFrom
+      ? normalizeDate(effectiveFrom).getTime()
+      : Number.NEGATIVE_INFINITY;
     const createdTs = scale.createdAt
       ? dateFromString(scale.createdAt)?.getTime() ?? Number.NEGATIVE_INFINITY
       : Number.NEGATIVE_INFINITY;
 
     if (
       !selected ||
-      startTs > selectedStart ||
-      (startTs === selectedStart && createdTs > selectedCreated)
+      (hasEndDate && !selectedHasEndDate) ||
+      (hasEndDate === selectedHasEndDate &&
+        (startTs > selectedStart ||
+          (startTs === selectedStart && createdTs > selectedCreated)))
     ) {
       selected = scale;
       selectedStart = startTs;
       selectedCreated = createdTs;
+      selectedHasEndDate = hasEndDate;
     }
   });
 

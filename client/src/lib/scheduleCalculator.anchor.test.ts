@@ -33,6 +33,52 @@ const makeScale = (overrides: Partial<Scale>): Scale => ({
 });
 
 describe("anchorDate/anchorMemberId", () => {
+  it("mantem escala desativada valida ate o dia anterior ao inactiveFrom", () => {
+    const ana = makeMember("a", "Ana");
+    const bruno = makeMember("b", "Bruno");
+    const teamMembers = [ana, bruno];
+
+    const oldScale = makeScale({
+      id: "old",
+      name: "Antiga",
+      weekdays: [1],
+      rotationMemberIds: [ana.id],
+      isActive: false,
+      createdAt: "2026-07-01",
+      effectiveFrom: "2026-07-01",
+      inactiveFrom: "2026-08-01",
+      anchorDate: "2026-07-06",
+      anchorMemberId: ana.id,
+    });
+    const newScale = makeScale({
+      id: "new",
+      name: "Nova",
+      weekdays: [1],
+      rotationMemberIds: [bruno.id],
+      isActive: true,
+      createdAt: "2026-07-15",
+      effectiveFrom: "2026-07-15",
+      anchorDate: "2026-07-20",
+      anchorMemberId: bruno.id,
+    });
+
+    const beforeEnd = getScheduledPerson(
+      new Date(2026, 6, 27),
+      teamMembers,
+      [oldScale, newScale]
+    );
+    const afterEnd = getScheduledPerson(
+      new Date(2026, 7, 3),
+      teamMembers,
+      [oldScale, newScale]
+    );
+
+    expect(beforeEnd?.scaleId).toBe("old");
+    expect(beforeEnd?.person).toBe("Ana");
+    expect(afterEnd?.scaleId).toBe("new");
+    expect(afterEnd?.person).toBe("Bruno");
+  });
+
   it("usa o membro âncora na data definida e segue rotação", () => {
     const ana = makeMember("a", "Ana");
     const bruno = makeMember("b", "Bruno");

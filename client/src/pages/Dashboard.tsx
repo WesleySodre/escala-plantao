@@ -131,6 +131,42 @@ export default function Dashboard() {
     return new Date(year, month - 1, day);
   };
 
+  const isValidDateInput = (value: string) => {
+    const parsed = parseDateInput(value);
+    return Boolean(parsed && formatDateInput(parsed) === value);
+  };
+
+  const isTeamMemberActiveOnDate = (
+    member: { joinDate: string; removeDate?: string },
+    date: Date
+  ) => {
+    const joinDate = parseDateInput(member.joinDate);
+    if (joinDate && date < joinDate) return false;
+
+    if (member.removeDate) {
+      const removeDate = parseDateInput(member.removeDate);
+      if (removeDate && date >= removeDate) return false;
+    }
+
+    return true;
+  };
+
+  const isTeamMemberActiveInRange = (
+    member: { joinDate: string; removeDate?: string },
+    startDate: Date,
+    endDate: Date
+  ) => {
+    const joinDate = parseDateInput(member.joinDate);
+    if (joinDate && joinDate > endDate) return false;
+
+    if (member.removeDate) {
+      const removeDate = parseDateInput(member.removeDate);
+      if (removeDate && removeDate <= startDate) return false;
+    }
+
+    return true;
+  };
+
   const formatDateDisplay = (date: Date) => {
     return new Intl.DateTimeFormat("pt-BR", {
       day: "2-digit",
@@ -202,23 +238,42 @@ export default function Dashboard() {
   }, [monthSchedule]);
 
   const activeTeamMembers = teamMembers.filter((member) => {
-    if (!member.removeDate) return true;
-    const removeDate = parseDateInput(member.removeDate);
-    if (!removeDate || !todayDate) return true;
-    return removeDate > todayDate;
+    if (!todayDate) return true;
+    return isTeamMemberActiveOnDate(member, todayDate);
   });
 
+  const monthStartDate = new Date(currentYear, currentMonth, 1);
+  const monthEndDate = new Date(currentYear, currentMonth + 1, 0);
+  const calendarFilterMembers = teamMembers.filter((member) =>
+    isTeamMemberActiveInRange(member, monthStartDate, monthEndDate)
+  );
+  const swapCandidateDate = parsedSwapDate ?? todayDate;
+  const swapCandidateMembers = swapCandidateDate
+    ? teamMembers.filter((member) => isTeamMemberActiveOnDate(member, swapCandidateDate))
+    : activeTeamMembers;
   const sortedScales = [...scales].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const activeMemberIds = activeTeamMembers.map((member) => member.id);
 
   useEffect(() => {
     if (
       selectedPerson !== "all" &&
-      !activeTeamMembers.some((member) => member.name === selectedPerson)
+      !calendarFilterMembers.some((member) => member.name === selectedPerson)
     ) {
       setSelectedPerson("all");
     }
-  }, [activeTeamMembers, selectedPerson]);
+  }, [calendarFilterMembers, selectedPerson]);
+
+  useEffect(() => {
+    if (swapOriginal && !swapCandidateMembers.some((member) => member.name === swapOriginal)) {
+      setSwapOriginal("");
+    }
+    if (
+      swapSubstitute &&
+      !swapCandidateMembers.some((member) => member.name === swapSubstitute)
+    ) {
+      setSwapSubstitute("");
+    }
+  }, [swapCandidateMembers, swapOriginal, swapSubstitute]);
 
 
   const normalizeName = (value: string) => {
@@ -249,21 +304,17 @@ export default function Dashboard() {
 
   const buildRotationListForScale = (scale: { rotationMemberIds: string[] } | null) => {
     if (!scale) return [...activeMemberIds];
-    const ordered = scale.rotationMemberIds.filter((id) => activeMemberIds.includes(id));
-    const missing = activeMemberIds.filter((id) => !ordered.includes(id));
-    return [...ordered, ...missing];
+    return scale.rotationMemberIds.filter((id) => activeMemberIds.includes(id));
   };
 
   const normalizeRotationList = (list: string[]) => {
     const seen = new Set<string>();
-    const filtered = list.filter((id) => {
+    return list.filter((id) => {
       if (!activeMemberIds.includes(id)) return false;
       if (seen.has(id)) return false;
       seen.add(id);
       return true;
     });
-    const missing = activeMemberIds.filter((id) => !seen.has(id));
-    return [...filtered, ...missing];
   };
 
   const monthName = new Intl.DateTimeFormat("pt-BR", {
@@ -325,6 +376,10 @@ export default function Dashboard() {
     const effectiveRemoveDate = removeMemberMode === "now" ? todayInput : removeMemberDate;
     if (!effectiveRemoveDate) {
       toast.error("Selecione a data de remocao");
+      return;
+    }
+    if (!isValidDateInput(effectiveRemoveDate)) {
+      toast.error("Informe uma data de remocao valida");
       return;
     }
     removeTeamMember(memberToRemoveData.id, effectiveRemoveDate);
@@ -437,6 +492,13 @@ export default function Dashboard() {
     }
     if (!swapOriginal || !swapSubstitute) {
       toast.error("Selecione o original e o substituto");
+      return;
+    }
+    if (
+      !swapCandidateMembers.some((member) => member.name === swapOriginal) ||
+      !swapCandidateMembers.some((member) => member.name === swapSubstitute)
+    ) {
+      toast.error("Selecione pessoas ativas na data da troca");
       return;
     }
     if (swapOriginal === swapSubstitute) {
@@ -764,7 +826,7 @@ export default function Dashboard() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Todas as pessoas</SelectItem>
-                  {activeTeamMembers.map((member) => (
+                  {calendarFilterMembers.map((member) => (
                     <SelectItem key={member.id} value={member.name}>
                       {member.name}
                     </SelectItem>
@@ -1025,7 +1087,6 @@ export default function Dashboard() {
                     <Input
                       id="remove-date"
                       type="date"
-                      min={todayInput}
                       value={removeMemberDate}
                       onChange={(event) => setRemoveMemberDate(event.target.value)}
                     />
@@ -1180,7 +1241,7 @@ export default function Dashboard() {
                       <SelectValue placeholder="Selecione o original" />
                     </SelectTrigger>
                     <SelectContent>
-                      {activeTeamMembers.map((member) => (
+                      {swapCandidateMembers.map((member) => (
                         <SelectItem key={member.id} value={member.name}>
                           {member.name}
                         </SelectItem>
@@ -1195,7 +1256,7 @@ export default function Dashboard() {
                       <SelectValue placeholder="Selecione o substituto" />
                     </SelectTrigger>
                     <SelectContent>
-                      {activeTeamMembers.map((member) => (
+                      {swapCandidateMembers.map((member) => (
                         <SelectItem key={member.id} value={member.name}>
                           {member.name}
                         </SelectItem>

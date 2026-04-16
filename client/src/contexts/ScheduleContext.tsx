@@ -57,6 +57,12 @@ export interface Holiday {
   name: string;
 }
 
+export interface HistoricalShift {
+  id: string;
+  date: string; // YYYY-MM-DD
+  person: string;
+}
+
 interface AppState {
   teamMembers: TeamMember[];
   timeOffs: TimeOff[];
@@ -135,6 +141,58 @@ const DEFAULT_AUTO_FRIDAY_SWAP: AutoFridaySwapConfig = {
   sameMonthOnly: false,
 };
 
+export const DEFAULT_HISTORICAL_SHIFTS: HistoricalShift[] = [
+  { id: "historical-2026-01-07", date: "2026-01-07", person: "Cláudia" },
+  { id: "historical-2026-01-08", date: "2026-01-08", person: "Rosana" },
+  { id: "historical-2026-01-09", date: "2026-01-09", person: "Daniel" },
+  { id: "historical-2026-01-12", date: "2026-01-12", person: "José Cláudio" },
+  { id: "historical-2026-01-13", date: "2026-01-13", person: "Kátia" },
+  { id: "historical-2026-01-14", date: "2026-01-14", person: "Daniel" },
+  { id: "historical-2026-01-15", date: "2026-01-15", person: "Leonardo" },
+  { id: "historical-2026-01-16", date: "2026-01-16", person: "Leonardo" },
+  { id: "historical-2026-01-19", date: "2026-01-19", person: "Dong" },
+  { id: "historical-2026-01-20", date: "2026-01-20", person: "Benedito" },
+  { id: "historical-2026-01-21", date: "2026-01-21", person: "Mauro" },
+  { id: "historical-2026-01-22", date: "2026-01-22", person: "Cláudia" },
+  { id: "historical-2026-01-23", date: "2026-01-23", person: "Dong" },
+  { id: "historical-2026-01-26", date: "2026-01-26", person: "Rosana" },
+  { id: "historical-2026-01-27", date: "2026-01-27", person: "José Cláudio" },
+  { id: "historical-2026-01-28", date: "2026-01-28", person: "Kátia" },
+  { id: "historical-2026-01-29", date: "2026-01-29", person: "Daniel" },
+  { id: "historical-2026-01-30", date: "2026-01-30", person: "Wesley" },
+  { id: "historical-2026-02-02", date: "2026-02-02", person: "Leonardo" },
+  { id: "historical-2026-02-03", date: "2026-02-03", person: "Dong" },
+  { id: "historical-2026-02-04", date: "2026-02-04", person: "Wesley" },
+  { id: "historical-2026-02-05", date: "2026-02-05", person: "Lúcia" },
+  { id: "historical-2026-02-06", date: "2026-02-06", person: "Benedito" },
+  { id: "historical-2026-02-09", date: "2026-02-09", person: "Benedito" },
+  { id: "historical-2026-02-10", date: "2026-02-10", person: "Mauro" },
+  { id: "historical-2026-02-11", date: "2026-02-11", person: "Cláudia" },
+  { id: "historical-2026-02-12", date: "2026-02-12", person: "Rosana" },
+  { id: "historical-2026-02-13", date: "2026-02-13", person: "Mauro" },
+  { id: "historical-2026-02-18", date: "2026-02-18", person: "José Cláudio" },
+  { id: "historical-2026-02-19", date: "2026-02-19", person: "Kátia" },
+  { id: "historical-2026-02-20", date: "2026-02-20", person: "Cláudia" },
+  { id: "historical-2026-02-23", date: "2026-02-23", person: "Daniel" },
+  { id: "historical-2026-02-24", date: "2026-02-24", person: "Leonardo" },
+  { id: "historical-2026-02-25", date: "2026-02-25", person: "Wesley" },
+  { id: "historical-2026-02-26", date: "2026-02-26", person: "Lúcia" },
+  { id: "historical-2026-02-27", date: "2026-02-27", person: "Rosana" },
+  { id: "historical-2026-03-02", date: "2026-03-02", person: "Luís Fernando" },
+  { id: "historical-2026-03-03", date: "2026-03-03", person: "Mauro" },
+  { id: "historical-2026-03-04", date: "2026-03-04", person: "Rosana" },
+  { id: "historical-2026-03-05", date: "2026-03-05", person: "José Cláudio" },
+  { id: "historical-2026-03-06", date: "2026-03-06", person: "Kátia" },
+  { id: "historical-2026-03-09", date: "2026-03-09", person: "Daniel" },
+  { id: "historical-2026-03-10", date: "2026-03-10", person: "Leonardo" },
+  { id: "historical-2026-03-11", date: "2026-03-11", person: "Wesley" },
+  { id: "historical-2026-03-12", date: "2026-03-12", person: "Lúcia" },
+  { id: "historical-2026-03-13", date: "2026-03-13", person: "Mauro" },
+  { id: "historical-2026-03-16", date: "2026-03-16", person: "Luís Fernando" },
+  { id: "historical-2026-03-17", date: "2026-03-17", person: "Rosana" },
+  { id: "historical-2026-03-18", date: "2026-03-18", person: "José Cláudio" },
+];
+
 interface ScheduleContextType {
   // Team Management
   teamMembers: TeamMember[];
@@ -176,6 +234,10 @@ interface ScheduleContextType {
   removeHoliday: (id: string) => void;
   isHolidayDate: (date: string) => boolean;
   replaceHolidays: (holidays: Holiday[]) => void;
+
+  // Historical Manual Shifts
+  historicalShifts: HistoricalShift[];
+  replaceHistoricalShifts: (historicalShifts: HistoricalShift[]) => void;
 
   // Data Management
   reloadFromSupabase: () => Promise<boolean>;
@@ -301,11 +363,10 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const memberIds = members.map((member) => member.id);
     return existingScales.map((scale) => {
       const filtered = scale.rotationMemberIds.filter((id) => memberIds.includes(id));
-      const missing = memberIds.filter((id) => !filtered.includes(id));
       const autoFridaySwap = normalizeAutoFridaySwapConfig(scale.autoFridaySwap, memberIds);
       return {
         ...scale,
-        rotationMemberIds: [...filtered, ...missing],
+        rotationMemberIds: filtered,
         autoFridaySwap,
       };
     });
@@ -404,6 +465,18 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     present: initialState,
     future: [],
   }));
+  const [historicalShifts, setHistoricalShifts] = useState<HistoricalShift[]>(() => {
+    if (typeof window === "undefined") return DEFAULT_HISTORICAL_SHIFTS;
+    const savedHistoricalShifts = window.localStorage.getItem("historicalShifts");
+    if (!savedHistoricalShifts) return DEFAULT_HISTORICAL_SHIFTS;
+
+    try {
+      return normalizeHistoricalShifts(JSON.parse(savedHistoricalShifts) as HistoricalShift[]);
+    } catch (e) {
+      console.error("Failed to load historical shifts", e);
+      return DEFAULT_HISTORICAL_SHIFTS;
+    }
+  });
 
   const { teamMembers, timeOffs, shiftSwaps, scales, holidays } = history.present;
 
@@ -414,13 +487,40 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       canDoFriday: typeof member.canDoFriday === "boolean" ? member.canDoFriday : true,
     }));
 
+  function normalizeHistoricalShifts(items: HistoricalShift[]) {
+    const byDate = new Map<string, HistoricalShift>();
+
+    items.forEach((item) => {
+      if (!item || typeof item.date !== "string" || typeof item.person !== "string") {
+        return;
+      }
+
+      const date = item.date.trim();
+      const person = item.person.trim();
+      if (!date || !person) return;
+
+      byDate.set(date, {
+        id: item.id || `historical-${date}`,
+        date,
+        person,
+      });
+    });
+
+    return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+  }
+
   const applyStateFromPayload = (payload: {
     teamMembers?: TeamMember[];
     timeOffs?: TimeOff[];
     holidays?: Holiday[];
     shiftSwaps?: ShiftSwap[];
     scales?: Scale[];
+    historicalShifts?: HistoricalShift[];
   }) => {
+    if (Array.isArray(payload.historicalShifts)) {
+      setHistoricalShifts(normalizeHistoricalShifts(payload.historicalShifts));
+    }
+
     setHistory((prev) => {
       const base = prev.present;
       let nextTeamMembers = base.teamMembers;
@@ -548,6 +648,7 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const savedHolidays = localStorage.getItem("holidays");
     const savedShiftSwaps = localStorage.getItem("shiftSwaps");
     const savedScales = localStorage.getItem("scales");
+    const savedHistoricalShifts = localStorage.getItem("historicalShifts");
 
     const payload: {
       teamMembers?: TeamMember[];
@@ -555,6 +656,7 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       holidays?: Holiday[];
       shiftSwaps?: ShiftSwap[];
       scales?: Scale[];
+      historicalShifts?: HistoricalShift[];
     } = {};
 
     if (savedTeam) {
@@ -594,6 +696,14 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         payload.holidays = JSON.parse(savedHolidays) as Holiday[];
       } catch (e) {
         console.error("Failed to load holidays", e);
+      }
+    }
+
+    if (savedHistoricalShifts) {
+      try {
+        payload.historicalShifts = JSON.parse(savedHistoricalShifts) as HistoricalShift[];
+      } catch (e) {
+        console.error("Failed to load historical shifts", e);
       }
     }
 
@@ -647,6 +757,10 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, [holidays]);
 
   useEffect(() => {
+    localStorage.setItem("historicalShifts", JSON.stringify(historicalShifts));
+  }, [historicalShifts]);
+
+  useEffect(() => {
     if (!isAdmin()) return;
 
     const token = getAdminJwt();
@@ -662,6 +776,7 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       holidays,
       shiftSwaps,
       scales,
+      historicalShifts,
     };
 
     const saveState = async () => {
@@ -691,7 +806,7 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
 
     saveState();
-  }, [teamMembers, timeOffs, holidays, shiftSwaps, scales]);
+  }, [teamMembers, timeOffs, holidays, shiftSwaps, scales, historicalShifts]);
 
   const addTeamMember = (name: string) => {
     const newMember: TeamMember = {
@@ -854,6 +969,10 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     commitHolidays(() => nextHolidays);
   };
 
+  const replaceHistoricalShifts = (nextHistoricalShifts: HistoricalShift[]) => {
+    setHistoricalShifts(normalizeHistoricalShifts(nextHistoricalShifts));
+  };
+
   return (
     <ScheduleContext.Provider
       value={{
@@ -883,6 +1002,8 @@ export const ScheduleProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         removeHoliday,
         isHolidayDate,
         replaceHolidays,
+        historicalShifts,
+        replaceHistoricalShifts,
         reloadFromSupabase,
         undo,
         redo,
